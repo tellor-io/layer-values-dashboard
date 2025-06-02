@@ -1,0 +1,55 @@
+[project]
+name = "layer-values-dashboard"
+version = "0.0.1"
+description = "A web dashboard for viewing and analyzing Tellor data gathered by the layer-values-monitor"
+readme = "README.md"
+authors = [
+    { name = "Tellor Development Community" }
+]
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.104.1",
+    "uvicorn>=0.24.0", 
+    "duckdb>=1.3.0",
+    "pandas>=2.1.4",
+    "python-multipart>=0.0.6",
+    "watchfiles>=0.21.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 125
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "ANN",  # flake8-annotations
+    "B",    # flake8-bugbear
+    "D",    # pydocstyle
+    "C4",   # flake8-comprehensions
+]
+per-file-ignores = { "tests/*" = ["ANN", "D"] }
+ignore = [
+    "D203",
+    "D213",
+    "ANN401",
+    "N806",
+    "ANN002",
+    "ANN003"
+]
+
+[tool.ruff.lint.isort]
+relative-imports-order = "closest-to-furthest"
+section-order = ["future", "standard-library", "first-party", "local-folder", "third-party"]
+
+[dependency-groups]
+dev = [       
+    "pytest-asyncio>=0.25.3",
+    "pytest>=8.3.5",
+    "ruff>=0.1.0",
+] 
