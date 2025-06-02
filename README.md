@@ -13,7 +13,7 @@
 1. **Download the project files**
 
 ```sh
-# git clone command & cd
+git clone https://github.com/tellor-io/layer-values-dashboard && cd layer-values-dashboard
 ```
 
 2. **Create and mount a python environment.**
@@ -28,7 +28,7 @@ uv venv && source .venv/bin/activate
 uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-values-monitor/logs/ --port 8000
 ```
 
-5. **Open your browser** and go to: `http://localhost:8000` (or your custom port)
+4. **Open your browser** and go to: `http://localhost:8000` (or your custom port)
 
 ## Usage
 
@@ -91,7 +91,7 @@ Options:
   --help, -h          Show help message
 ```
 
-## 🎨 Customization
+## Customization
 
 ### Styling
 - Edit `frontend/style.css` to customize the appearance
@@ -103,7 +103,7 @@ Options:
 - Extend the frontend in `frontend/app.js`
 - Modify data processing logic in the DuckDB queries
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
