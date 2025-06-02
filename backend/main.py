@@ -17,7 +17,7 @@ import re
 # Configuration
 SOURCE_DIR = os.getenv('LAYER_SOURCE_DIR', 'source_tables')
 
-app = FastAPI(title="Layer Values Dashboard", version="1.0.0")
+app = FastAPI(title="Layer Values Dashboard", version="1.0.0", root_path="/dashboard")
 
 # Enable CORS for frontend
 app.add_middleware(
