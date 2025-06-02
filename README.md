@@ -25,7 +25,7 @@ uv venv && source .venv/bin/activate
 3. **Start the dashboard**
 
 ```sh
-uv run python start_dashboard.py --source-dir /home/spuddy/projects/dev/layer-values-monitor/logs/ --port 8000
+uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-values-monitor/logs/ --port 8000
 ```
 
 5. **Open your browser** and go to: `http://localhost:8000` (or your custom port)
