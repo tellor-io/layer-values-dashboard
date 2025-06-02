@@ -8,7 +8,6 @@ let isLiveUpdatesActive = false;
 
 // Configuration
 const RECORDS_PER_PAGE = 100;
-const API_BASE = '';
 
 // DOM elements
 const elements = {
@@ -182,12 +181,14 @@ const toggleLiveUpdates = async () => {
 // API functions
 const apiCall = async (endpoint, params = {}) => {
     try {
-        const url = new URL(`${API_BASE}/api${endpoint}`, window.location.origin);
-        Object.keys(params).forEach(key => {
-            if (params[key] !== null && params[key] !== undefined && params[key] !== '') {
-                url.searchParams.append(key, params[key]);
-            }
-        });
+        // Build query string if params exist
+        const queryString = Object.keys(params)
+            .filter(key => params[key] !== null && params[key] !== undefined && params[key] !== '')
+            .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+            .join('&');
+        
+        // Use simple relative URL - this will work correctly with the current page location
+        const url = `./api${endpoint}${queryString ? '?' + queryString : ''}`;
         
         const response = await fetch(url);
         if (!response.ok) {
