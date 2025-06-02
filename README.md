@@ -28,7 +28,7 @@ uv venv && source .venv/bin/activate
 uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-values-monitor/logs/ --port 8000
 ```
 
-4. **Open your browser** and go to: `http://localhost:8000` (or your custom port)
+4. **Open your browser** and go to: `http://localhost:8000/dashboard/` (or your custom port)
 
 ## Usage
 
