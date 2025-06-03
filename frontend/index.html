@@ -112,12 +112,10 @@
                                 <span class="stat-value" id="total-records">-</span>
                             </div>
                             <div class="stat-item">
-                                <span class="stat-label">Live Updates</span>
-                                <span class="stat-value" id="live-status">
-                                    <i class="fas fa-circle status-indicator paused"></i>
-                                    <button id="live-toggle" class="live-toggle-btn paused" title="Start live updates">
-                                        <i class="fas fa-play"></i>
-                                    </button>
+                                <span class="stat-label">Page Loaded</span>
+                                <span class="stat-value" id="page-load-time">
+                                    <i class="fas fa-clock"></i>
+                                    <span id="load-timestamp">Loading...</span>
                                 </span>
                             </div>
                         </div>
@@ -198,16 +196,13 @@
                 <div class="modal-body analytics-modal-body">
                     <div class="analytics-controls">
                         <button class="analytics-btn active" data-timeframe="hourly">
-                            <i class="fas fa-clock"></i> Hourly
+                            <i class="fas fa-clock"></i> RP30M-Past-Day
                         </button>
                         <button class="analytics-btn" data-timeframe="daily">
-                            <i class="fas fa-calendar-day"></i> Daily
+                            <i class="fas fa-calendar-day"></i> RPD-Past-Month
                         </button>
                         <button class="analytics-btn" data-timeframe="weekly">
-                            <i class="fas fa-calendar-week"></i> Weekly
-                        </button>
-                        <button class="analytics-btn" data-timeframe="yearly">
-                            <i class="fas fa-calendar"></i> Yearly
+                            <i class="fas fa-calendar-week"></i> RPH-Past-Week
                         </button>
                     </div>
                     <div class="chart-container">

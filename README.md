@@ -40,12 +40,13 @@ uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-val
 
 ### API Endpoints
 
-The backend provides RESTful API endpoints:
+The backend provides RESTful API endpoints under `/dashboard/api/`:
 
-- `GET /api/info` - Data source information
-- `GET /api/stats` - Statistical overview
-- `GET /api/data` - Paginated data with filtering
-- `GET /api/search` - Full-text search
+- `GET /dashboard/api/info` - Data source information
+- `GET /dashboard/api/stats` - Statistical overview
+- `GET /dashboard/api/data` - Paginated data with filtering
+- `GET /dashboard/api/search` - Full-text search
+- `GET /dashboard/api/analytics` - Analytics data for different timeframes
 
 Visit `http://localhost:8000/docs` for interactive API documentation.
 
