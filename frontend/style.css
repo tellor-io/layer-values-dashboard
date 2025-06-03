@@ -484,6 +484,12 @@ body {
     text-shadow: 0 0 5px rgba(0, 255, 136, 0.5);
 }
 
+.data-table .trusted-value {
+    font-weight: 600;
+    color: #a855f7;
+    text-shadow: 0 0 5px rgba(168, 85, 247, 0.5);
+}
+
 .data-table .hash {
     font-family: 'Courier New', monospace;
     font-size: 0.75rem;
@@ -1454,4 +1460,116 @@ body {
     display: grid;
     grid-template-columns: 2fr 1fr;
     gap: 2rem;
+}
+
+.data-table .agreement {
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-align: center;
+    min-width: 80px;
+}
+
+.agreement-perfect {
+    color: #00ff88;
+    text-shadow: 0 0 5px rgba(0, 255, 136, 0.5);
+    /* ≥99% agreement - excellent */
+}
+
+.agreement-good {
+    color: #32cd32;
+    /* ≥95% agreement - good */
+}
+
+.agreement-moderate {
+    color: #ffd700;
+    /* ≥90% agreement - acceptable */
+}
+
+.agreement-poor {
+    color: #ff6b35;
+    text-shadow: 0 0 5px rgba(255, 107, 53, 0.5);
+    /* <90% agreement - poor */
+}
+
+.agreement-na {
+    color: #666;
+    font-style: italic;
+}
+
+/* Agreement Legend Styles */
+.agreement-legend {
+    margin-top: 1.5rem;
+    background: rgba(20, 20, 30, 0.8);
+    border: 2px solid #333344;
+    border-radius: 4px;
+    padding: 1rem;
+}
+
+.agreement-legend .legend-header h4 {
+    color: #a855f7;
+    margin: 0 0 1rem 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.agreement-legend .legend-items {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.75rem;
+}
+
+.agreement-legend .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem;
+    background: rgba(25, 25, 35, 0.6);
+    border: 1px solid #333344;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.agreement-legend .legend-item:hover {
+    border-color: #00ff88;
+    background: rgba(25, 25, 35, 0.8);
+}
+
+.agreement-legend .legend-item.hidden {
+    opacity: 0.4;
+    background: rgba(15, 15, 20, 0.6);
+}
+
+.agreement-legend .legend-item.hidden .legend-color {
+    opacity: 0.3;
+}
+
+.agreement-legend .legend-color {
+    width: 16px;
+    height: 16px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.agreement-legend .legend-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.agreement-legend .legend-label {
+    color: #00ff88;
+    font-size: 0.75rem;
+    font-weight: 500;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agreement-legend .legend-count {
+    color: #00d4ff;
+    font-size: 0.6875rem;
+    opacity: 0.8;
 } 

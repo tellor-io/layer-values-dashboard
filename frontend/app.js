@@ -89,7 +89,19 @@ const elements = {
     absentReportersSection: document.getElementById('absent-reporters-section'),
     absentReportersList: document.getElementById('absent-reporters-list'),
     queryIdSelect: document.getElementById('query-id-select'),
-    powerInfo: document.getElementById('power-info')
+    powerInfo: document.getElementById('power-info'),
+    
+    // Agreement card
+    averageAgreement: document.getElementById('average-agreement'),
+    agreementCard: document.getElementById('agreement-card'),
+    
+    // Agreement analytics modal
+    agreementAnalyticsModal: document.getElementById('agreement-analytics-modal'),
+    agreementAnalyticsModalClose: document.getElementById('agreement-analytics-modal-close'),
+    agreementAnalyticsTitle: document.getElementById('agreement-analytics-title'),
+    agreementAnalyticsChart: document.getElementById('agreement-analytics-chart'),
+    agreementAnalyticsLoading: document.getElementById('agreement-analytics-loading'),
+    agreementLegend: document.getElementById('agreement-legend'),
 };
 
 // Utility functions
@@ -283,6 +295,13 @@ const loadStats = async () => {
         
         totalRecords = stats.total_rows;
         
+        // Update agreement card
+        if (stats.average_agreement !== null) {
+            elements.averageAgreement.textContent = `${stats.average_agreement.toFixed(2)}%`;
+        } else {
+            elements.averageAgreement.textContent = '-';
+        }
+        
     } catch (error) {
         console.error('Failed to load stats:', error);
     }
@@ -311,7 +330,7 @@ const loadData = async (page = 1, filters = {}) => {
         
     } catch (error) {
         console.error('Failed to load data:', error);
-        elements.dataTbody.innerHTML = '<tr><td colspan="7" class="text-center text-red">Failed to load data</td></tr>';
+        elements.dataTbody.innerHTML = '<tr><td colspan="9" class="text-center text-red">Failed to load data</td></tr>';
     } finally {
         hideLoading();
     }
@@ -340,15 +359,43 @@ const searchData = async (query) => {
         
     } catch (error) {
         console.error('Search failed:', error);
-        elements.dataTbody.innerHTML = '<tr><td colspan="7" class="text-center text-red">Search failed</td></tr>';
+        elements.dataTbody.innerHTML = '<tr><td colspan="9" class="text-center text-red">Search failed</td></tr>';
     } finally {
         hideLoading();
     }
 };
 
+const formatAgreement = (reportedValue, trustedValue) => {
+    if (reportedValue === null || reportedValue === undefined || 
+        trustedValue === null || trustedValue === undefined || trustedValue === 0) {
+        return '-';
+    }
+    
+    const percentDiff = Math.abs((reportedValue - trustedValue) / trustedValue);
+    const agreement = (1 - percentDiff) * 100;
+    
+    // Format with 2 decimal places and add % sign
+    return `${agreement.toFixed(2)}%`;
+};
+
+const getAgreementClass = (reportedValue, trustedValue) => {
+    if (reportedValue === null || reportedValue === undefined || 
+        trustedValue === null || trustedValue === undefined || trustedValue === 0) {
+        return 'agreement-na';
+    }
+    
+    const percentDiff = Math.abs((reportedValue - trustedValue) / trustedValue);
+    const agreement = (1 - percentDiff) * 100;
+    
+    if (agreement >= 99) return 'agreement-perfect';     // ≥99% agreement
+    if (agreement >= 95) return 'agreement-good';       // ≥95% agreement  
+    if (agreement >= 90) return 'agreement-moderate';   // ≥90% agreement
+    return 'agreement-poor';                             // <90% agreement
+};
+
 const renderTable = (data) => {
     if (!data || data.length === 0) {
-        elements.dataTbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray">No data found</td></tr>';
+        elements.dataTbody.innerHTML = '<tr><td colspan="9" class="text-center text-gray">No data found</td></tr>';
         return;
     }
     
@@ -361,6 +408,8 @@ const renderTable = (data) => {
             </td>
             <td class="hash" title="${row.QUERY_ID}">${row.QUERY_ID}</td>
             <td class="value">${formatValue(row.VALUE)}</td>
+            <td class="trusted-value">${formatValue(row.TRUSTED_VALUE)}</td>
+            <td class="agreement ${getAgreementClass(row.VALUE, row.TRUSTED_VALUE)}">${formatAgreement(row.VALUE, row.TRUSTED_VALUE)}</td>
             <td class="reporter" title="${row.REPORTER}">${row.REPORTER}</td>
             <td class="text-center">${formatNumber(row.POWER)}</td>
             <td class="text-center time-ago">${formatTimeAgo(row.TIMESTAMP)}</td>
@@ -1317,6 +1366,222 @@ const showAbsentReporters = (data) => {
     elements.absentReportersList.innerHTML = absentItems;
 };
 
+// Agreement Analytics functionality
+let agreementAnalyticsChart = null;
+let hiddenAgreementDatasets = new Set();
+
+const showAgreementAnalyticsModal = () => {
+    elements.agreementAnalyticsModal.classList.add('show');
+    loadAgreementAnalytics('24h'); // Default to 24h view
+};
+
+const hideAgreementAnalyticsModal = () => {
+    elements.agreementAnalyticsModal.classList.remove('show');
+    if (agreementAnalyticsChart) {
+        agreementAnalyticsChart.destroy();
+        agreementAnalyticsChart = null;
+    }
+    hiddenAgreementDatasets.clear();
+};
+
+const loadAgreementAnalytics = async (timeframe) => {
+    try {
+        // Show loading
+        elements.agreementAnalyticsLoading.style.display = 'flex';
+        
+        // Update active button
+        const agreementButtons = elements.agreementAnalyticsModal.querySelectorAll('.analytics-btn');
+        agreementButtons.forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.timeframe === timeframe) {
+                btn.classList.add('active');
+            }
+        });
+        
+        // Fetch agreement analytics data
+        const data = await apiCall('/agreement-analytics', { timeframe });
+        
+        // Update title
+        elements.agreementAnalyticsTitle.textContent = data.title;
+        
+        // Create or update chart
+        createAgreementAnalyticsChart(data);
+        
+        // Create legend
+        createAgreementLegend(data);
+        
+    } catch (error) {
+        console.error('Failed to load agreement analytics:', error);
+        elements.agreementAnalyticsTitle.textContent = 'Failed to load agreement analytics';
+    } finally {
+        // Hide loading
+        elements.agreementAnalyticsLoading.style.display = 'none';
+    }
+};
+
+const createAgreementAnalyticsChart = (data) => {
+    const ctx = elements.agreementAnalyticsChart.getContext('2d');
+    
+    // Destroy existing chart
+    if (agreementAnalyticsChart) {
+        agreementAnalyticsChart.destroy();
+    }
+    
+    if (!data.query_ids || data.query_ids.length === 0) {
+        // Show "No data" message
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = '16px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('No data available for this timeframe', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+    }
+    
+    // Generate colors for each query ID
+    const colors = generateColors(data.query_ids.length);
+    
+    // Prepare datasets
+    const datasets = data.query_ids.map((queryInfo, index) => {
+        const isHidden = hiddenAgreementDatasets.has(queryInfo.id);
+        return {
+            label: queryInfo.short_name,
+            data: data.data[queryInfo.id] || [],
+            borderColor: colors[index],
+            backgroundColor: `${colors[index]}20`,
+            borderWidth: 2,
+            fill: false,
+            tension: 0.4,
+            pointBackgroundColor: colors[index],
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            hidden: isHidden,
+            queryId: queryInfo.id,
+            totalCount: queryInfo.total_count
+        };
+    });
+    
+    agreementAnalyticsChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.time_labels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false // We'll use our custom legend
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        title: function(context) {
+                            return `Time: ${context[0].label}`;
+                        },
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            const value = context.parsed.y;
+                            return value !== null ? `${dataset.label}: ${value.toFixed(2)}% deviation` : `${dataset.label}: No data`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: '#00d4ff',
+                        maxTicksLimit: 8
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    }
+                },
+                y: {
+                    ticks: {
+                        color: '#00d4ff',
+                        beginAtZero: true,
+                        callback: function(value) {
+                            return value + '%';
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Average Deviation (%)',
+                        color: '#00d4ff'
+                    }
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            }
+        }
+    });
+};
+
+const createAgreementLegend = (data) => {
+    if (!data.query_ids || data.query_ids.length === 0) {
+        elements.agreementLegend.innerHTML = '<p class="no-data">No query IDs found for this timeframe</p>';
+        return;
+    }
+    
+    const colors = generateColors(data.query_ids.length);
+    
+    const legendItems = data.query_ids.map((queryInfo, index) => {
+        const isHidden = hiddenAgreementDatasets.has(queryInfo.id);
+        return `
+            <div class="legend-item ${isHidden ? 'hidden' : ''}" data-query-id="${queryInfo.id}">
+                <div class="legend-color" style="background-color: ${colors[index]}"></div>
+                <div class="legend-text">
+                    <div class="legend-label" title="${queryInfo.id}">${queryInfo.short_name}</div>
+                    <div class="legend-count">${queryInfo.total_count} reports</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    elements.agreementLegend.innerHTML = `
+        <div class="legend-header">
+            <h4>Query IDs (click to toggle)</h4>
+        </div>
+        <div class="legend-items">
+            ${legendItems}
+        </div>
+    `;
+    
+    // Add click handlers for legend items
+    elements.agreementLegend.querySelectorAll('.legend-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const queryId = item.dataset.queryId;
+            
+            if (hiddenAgreementDatasets.has(queryId)) {
+                hiddenAgreementDatasets.delete(queryId);
+                item.classList.remove('hidden');
+            } else {
+                hiddenAgreementDatasets.add(queryId);
+                item.classList.add('hidden');
+            }
+            
+            // Update chart
+            if (agreementAnalyticsChart) {
+                agreementAnalyticsChart.data.datasets.forEach(dataset => {
+                    if (dataset.queryId === queryId) {
+                        dataset.hidden = hiddenAgreementDatasets.has(queryId);
+                    }
+                });
+                agreementAnalyticsChart.update();
+            }
+        });
+    });
+};
+
 // Event listeners
 document.addEventListener('DOMContentLoaded', async () => {
     // Set and display load time
@@ -1472,6 +1737,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadPowerAnalytics(selectedQueryId);
     });
     
+    // Agreement analytics card click
+    elements.agreementCard.addEventListener('click', showAgreementAnalyticsModal);
+    
+    // Agreement Analytics modal functionality
+    elements.agreementAnalyticsModalClose.addEventListener('click', hideAgreementAnalyticsModal);
+    
+    elements.agreementAnalyticsModal.addEventListener('click', (e) => {
+        if (e.target === elements.agreementAnalyticsModal) {
+            hideAgreementAnalyticsModal();
+        }
+    });
+    
+    // Agreement Analytics timeframe buttons
+    elements.agreementAnalyticsModal.querySelectorAll('.analytics-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const timeframe = btn.dataset.timeframe;
+            loadAgreementAnalytics(timeframe);
+        });
+    });
+    
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
@@ -1480,6 +1765,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             hideQueryAnalyticsModal();
             hideReporterAnalyticsModal();
             hidePowerAnalyticsModal();
+            hideAgreementAnalyticsModal();
         }
         
         if (e.ctrlKey || e.metaKey) {

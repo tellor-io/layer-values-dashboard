@@ -525,6 +525,37 @@ async def get_stats():
             
             stats["unique_query_ids_30d"] = unique_query_ids_30d
             
+            # Average agreement for most recent query ID
+            recent_query_agreement = conn.execute("""
+                WITH recent_query AS (
+                    SELECT QUERY_ID
+                    FROM layer_data
+                    ORDER BY TIMESTAMP DESC
+                    LIMIT 1
+                ),
+                recent_timestamp AS (
+                    SELECT TIMESTAMP
+                    FROM layer_data
+                    ORDER BY TIMESTAMP DESC
+                    LIMIT 1
+                )
+                SELECT 
+                    AVG(CASE 
+                        WHEN ld.TRUSTED_VALUE != 0 THEN 
+                            (1 - ABS((ld.VALUE - ld.TRUSTED_VALUE) / ld.TRUSTED_VALUE)) * 100
+                        ELSE NULL 
+                    END) as avg_agreement
+                FROM recent_query rq
+                JOIN recent_timestamp rt ON 1=1
+                JOIN layer_data ld ON rq.QUERY_ID = ld.QUERY_ID AND rt.TIMESTAMP = ld.TIMESTAMP
+                WHERE ld.TRUSTED_VALUE != 0
+            """).fetchone()
+            
+            if recent_query_agreement and recent_query_agreement[0] is not None:
+                stats["average_agreement"] = round(recent_query_agreement[0], 2)
+            else:
+                stats["average_agreement"] = None
+            
             # Value statistics
             value_stats = conn.execute("""
                 SELECT 
@@ -1257,7 +1288,7 @@ async def get_reporter_power_analytics(
                     query_info_dict = None
                 
                 title = f"Reporter Power Distribution - {query_id[:20]}{'...' if len(query_id) > 20 else ''}"
-                
+            
             else:
                 print(f"📊 Getting overall power distribution")
                 
@@ -1407,6 +1438,154 @@ async def get_reporter_power_analytics(
             pass
             
         raise HTTPException(status_code=500, detail=f"Reporter power analytics processing failed: {str(e)}")
+
+@dashboard_app.get("/api/agreement-analytics")
+async def get_agreement_analytics(
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+):
+    """Get agreement analytics showing deviation from trusted values by query ID"""
+    try:
+        print(f"🔄 Agreement analytics request: timeframe={timeframe}")
+        current_time_ms = int(time.time() * 1000)
+        
+        # Add memory usage logging
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+        print(f"📊 Initial memory usage: {initial_memory:.1f} MB")
+        
+        # Use thread-safe database access
+        with db_lock:
+            if timeframe == "24h":
+                print("🕒 Processing 24h agreement analytics...")
+                # 2-hour intervals over past 24 hours
+                hours_24_ms = 24 * 60 * 60 * 1000
+                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
+                num_buckets = 12
+                start_time = current_time_ms - hours_24_ms
+                
+            elif timeframe == "7d":
+                print("📅 Processing 7d agreement analytics...")
+                # Daily intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 7
+                start_time = current_time_ms - days_7_ms
+                
+            elif timeframe == "30d":
+                print("📊 Processing 30d agreement analytics...")
+                # 3-day intervals over past 30 days
+                days_30_ms = 30 * 24 * 60 * 60 * 1000
+                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
+                num_buckets = 10
+                start_time = current_time_ms - days_30_ms
+            
+            print(f"📈 Querying agreement data from {start_time} to {current_time_ms}")
+            
+            # Get top query IDs in the timeframe
+            top_query_ids = conn.execute("""
+                SELECT QUERY_ID, COUNT(*) as count 
+                FROM layer_data 
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ?
+                AND TRUSTED_VALUE != 0
+                GROUP BY QUERY_ID 
+                ORDER BY count DESC 
+                LIMIT 10
+            """, [start_time, current_time_ms]).fetchall()
+            
+            if not top_query_ids:
+                return {
+                    "timeframe": timeframe,
+                    "title": f"Agreement Analytics (Past {timeframe})",
+                    "data": [],
+                    "query_ids": []
+                }
+            
+            print(f"🔍 Found {len(top_query_ids)} top query IDs")
+            
+            # Get deviation data for each query ID
+            query_data = {}
+            query_id_list = []
+            
+            for query_id_row in top_query_ids:
+                query_id = query_id_row[0]
+                query_id_list.append({
+                    "id": query_id,
+                    "total_count": query_id_row[1],
+                    "short_name": query_id[:12] + "..." if len(query_id) > 15 else query_id
+                })
+                
+                # Get bucketed deviation data for this query ID
+                results = conn.execute("""
+                    WITH time_buckets AS (
+                        SELECT 
+                            TIMESTAMP,
+                            FLOOR((TIMESTAMP - ?) / ?) as bucket_id,
+                            ABS((VALUE - TRUSTED_VALUE) / TRUSTED_VALUE) * 100 as deviation_percent
+                        FROM layer_data 
+                        WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                        AND QUERY_ID = ?
+                        AND TRUSTED_VALUE != 0
+                    )
+                    SELECT 
+                        bucket_id,
+                        AVG(deviation_percent) as avg_deviation
+                    FROM time_buckets
+                    GROUP BY bucket_id
+                    ORDER BY bucket_id
+                """, [start_time, interval_ms, start_time, current_time_ms, query_id]).fetchall()
+                
+                # Create complete time series for this query ID
+                buckets = []
+                for i in range(num_buckets):
+                    bucket_start = start_time + (i * interval_ms)
+                    
+                    # Find matching result
+                    avg_deviation = None
+                    for result in results:
+                        if result[0] == i:
+                            avg_deviation = result[1]
+                            break
+                    
+                    buckets.append(avg_deviation)
+                
+                query_data[query_id] = buckets
+            
+            # Generate time labels
+            time_labels = []
+            for i in range(num_buckets):
+                bucket_start = start_time + (i * interval_ms)
+                dt = pd.to_datetime(bucket_start, unit='ms')
+                
+                if timeframe == "24h":
+                    time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d'))
+                elif timeframe == "30d":
+                    time_labels.append(dt.strftime('%m/%d'))
+            
+            return {
+                "timeframe": timeframe,
+                "title": f"Agreement Analytics - Deviation from Trusted Values (Past {timeframe})",
+                "time_labels": time_labels,
+                "query_ids": query_id_list,
+                "data": query_data
+            }
+            
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"❌ Agreement analytics error: {str(e)}")
+        print(f"📋 Full traceback:\n{error_details}")
+        
+        # Log memory state on error
+        try:
+            process = psutil.Process()
+            current_memory = process.memory_info().rss / 1024 / 1024  # MB
+            print(f"📊 Memory usage at error: {current_memory:.1f} MB")
+        except:
+            pass
+            
+        raise HTTPException(status_code=500, detail=f"Agreement analytics processing failed: {str(e)}")
 
 # Mount static files for dashboard
 dashboard_app.mount("/static", StaticFiles(directory="../frontend"), name="static")
