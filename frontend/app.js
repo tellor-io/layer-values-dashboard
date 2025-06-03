@@ -17,6 +17,8 @@ const elements = {
     
     // Stats cards
     uniqueReporters: document.getElementById('unique-reporters'),
+    uniqueQueryIds30d: document.getElementById('unique-query-ids-30d'),
+    queryIdsCard: document.getElementById('query-ids-card'),
     totalReporterPower: document.getElementById('total-reporter-power'),
     recentActivity: document.getElementById('recent-activity'),
     recentActivityCard: document.getElementById('recent-activity-card'),
@@ -57,7 +59,15 @@ const elements = {
     analyticsModalClose: document.getElementById('analytics-modal-close'),
     analyticsTitle: document.getElementById('analytics-title'),
     analyticsChart: document.getElementById('analytics-chart'),
-    analyticsLoading: document.getElementById('analytics-loading')
+    analyticsLoading: document.getElementById('analytics-loading'),
+    
+    // Query analytics modal
+    queryAnalyticsModal: document.getElementById('query-analytics-modal'),
+    queryAnalyticsModalClose: document.getElementById('query-analytics-modal-close'),
+    queryAnalyticsTitle: document.getElementById('query-analytics-title'),
+    queryAnalyticsChart: document.getElementById('query-analytics-chart'),
+    queryAnalyticsLoading: document.getElementById('query-analytics-loading'),
+    queryLegend: document.getElementById('query-legend')
 };
 
 // Utility functions
@@ -178,6 +188,7 @@ const loadStats = async () => {
         
         // Update stats cards
         elements.uniqueReporters.textContent = formatNumber(stats.unique_reporters);
+        elements.uniqueQueryIds30d.textContent = formatNumber(stats.unique_query_ids_30d);
         elements.totalReporterPower.textContent = stats.total_reporter_power ? formatValue(stats.total_reporter_power) : '-';
         elements.recentActivity.textContent = formatNumber(stats.recent_activity);
         
@@ -552,6 +563,226 @@ const createAnalyticsChart = (data) => {
     });
 };
 
+// Query Analytics functionality
+let queryAnalyticsChart = null;
+let hiddenDatasets = new Set();
+
+const showQueryAnalyticsModal = () => {
+    elements.queryAnalyticsModal.classList.add('show');
+    loadQueryAnalytics('24h'); // Default to 24h view
+};
+
+const hideQueryAnalyticsModal = () => {
+    elements.queryAnalyticsModal.classList.remove('show');
+    if (queryAnalyticsChart) {
+        queryAnalyticsChart.destroy();
+        queryAnalyticsChart = null;
+    }
+    hiddenDatasets.clear();
+};
+
+const loadQueryAnalytics = async (timeframe) => {
+    try {
+        // Show loading
+        elements.queryAnalyticsLoading.style.display = 'flex';
+        
+        // Update active button in query analytics modal
+        const queryButtons = elements.queryAnalyticsModal.querySelectorAll('.analytics-btn');
+        queryButtons.forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.timeframe === timeframe) {
+                btn.classList.add('active');
+            }
+        });
+        
+        // Fetch query analytics data
+        const data = await apiCall('/query-analytics', { timeframe });
+        
+        // Update title
+        elements.queryAnalyticsTitle.textContent = data.title;
+        
+        // Create or update chart
+        createQueryAnalyticsChart(data);
+        
+        // Create legend
+        createQueryLegend(data);
+        
+    } catch (error) {
+        console.error('Failed to load query analytics:', error);
+        elements.queryAnalyticsTitle.textContent = 'Failed to load query analytics';
+    } finally {
+        // Hide loading
+        elements.queryAnalyticsLoading.style.display = 'none';
+    }
+};
+
+const generateColors = (count) => {
+    const colors = [
+        '#00ff88', '#00d4ff', '#a855f7', '#ff6b35', '#ffd700',
+        '#ff69b4', '#32cd32', '#ff4500', '#9370db', '#20b2aa'
+    ];
+    
+    const result = [];
+    for (let i = 0; i < count; i++) {
+        result.push(colors[i % colors.length]);
+    }
+    return result;
+};
+
+const createQueryAnalyticsChart = (data) => {
+    const ctx = elements.queryAnalyticsChart.getContext('2d');
+    
+    // Destroy existing chart
+    if (queryAnalyticsChart) {
+        queryAnalyticsChart.destroy();
+    }
+    
+    if (!data.query_ids || data.query_ids.length === 0) {
+        // Show "No data" message
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = '16px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('No data available for this timeframe', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+    }
+    
+    // Generate colors for each query ID
+    const colors = generateColors(data.query_ids.length);
+    
+    // Prepare datasets
+    const datasets = data.query_ids.map((queryInfo, index) => {
+        const isHidden = hiddenDatasets.has(queryInfo.id);
+        return {
+            label: queryInfo.short_name,
+            data: data.data[queryInfo.id] || [],
+            borderColor: colors[index],
+            backgroundColor: `${colors[index]}20`,
+            borderWidth: 2,
+            fill: false,
+            tension: 0.4,
+            pointBackgroundColor: colors[index],
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            hidden: isHidden,
+            queryId: queryInfo.id,
+            totalCount: queryInfo.total_count
+        };
+    });
+    
+    queryAnalyticsChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.time_labels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false // We'll use our custom legend
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        title: function(context) {
+                            return `Time: ${context[0].label}`;
+                        },
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            return `${dataset.label}: ${context.formattedValue} reports`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: '#00d4ff',
+                        maxTicksLimit: 8
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    }
+                },
+                y: {
+                    ticks: {
+                        color: '#00d4ff',
+                        beginAtZero: true
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    }
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            }
+        }
+    });
+};
+
+const createQueryLegend = (data) => {
+    if (!data.query_ids || data.query_ids.length === 0) {
+        elements.queryLegend.innerHTML = '<p class="no-data">No query IDs found for this timeframe</p>';
+        return;
+    }
+    
+    const colors = generateColors(data.query_ids.length);
+    
+    const legendItems = data.query_ids.map((queryInfo, index) => {
+        const isHidden = hiddenDatasets.has(queryInfo.id);
+        return `
+            <div class="legend-item ${isHidden ? 'hidden' : ''}" data-query-id="${queryInfo.id}">
+                <div class="legend-color" style="background-color: ${colors[index]}"></div>
+                <div class="legend-text">
+                    <div class="legend-label" title="${queryInfo.id}">${queryInfo.short_name}</div>
+                    <div class="legend-count">${queryInfo.total_count} reports</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    elements.queryLegend.innerHTML = `
+        <div class="legend-header">
+            <h4>Query IDs (click to toggle)</h4>
+        </div>
+        <div class="legend-items">
+            ${legendItems}
+        </div>
+    `;
+    
+    // Add click handlers for legend items
+    elements.queryLegend.querySelectorAll('.legend-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const queryId = item.dataset.queryId;
+            
+            if (hiddenDatasets.has(queryId)) {
+                hiddenDatasets.delete(queryId);
+                item.classList.remove('hidden');
+            } else {
+                hiddenDatasets.add(queryId);
+                item.classList.add('hidden');
+            }
+            
+            // Update chart
+            if (queryAnalyticsChart) {
+                queryAnalyticsChart.data.datasets.forEach(dataset => {
+                    if (dataset.queryId === queryId) {
+                        dataset.hidden = hiddenDatasets.has(queryId);
+                    }
+                });
+                queryAnalyticsChart.update();
+            }
+        });
+    });
+};
+
 // Event listeners
 document.addEventListener('DOMContentLoaded', async () => {
     // Set and display load time
@@ -563,6 +794,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Analytics card click
     elements.recentActivityCard.addEventListener('click', showAnalyticsModal);
+    
+    // Query analytics card click
+    elements.queryIdsCard.addEventListener('click', showQueryAnalyticsModal);
     
     // Questionable values card click
     elements.questionableCard.addEventListener('click', showQuestionableValues);
@@ -649,11 +883,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
     
-    // Analytics timeframe buttons
-    document.querySelectorAll('.analytics-btn').forEach(btn => {
+    // Query Analytics modal functionality
+    elements.queryAnalyticsModalClose.addEventListener('click', hideQueryAnalyticsModal);
+    
+    elements.queryAnalyticsModal.addEventListener('click', (e) => {
+        if (e.target === elements.queryAnalyticsModal) {
+            hideQueryAnalyticsModal();
+        }
+    });
+    
+    // Query Analytics timeframe buttons
+    elements.queryAnalyticsModal.querySelectorAll('.analytics-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const timeframe = btn.dataset.timeframe;
-            loadAnalytics(timeframe);
+            loadQueryAnalytics(timeframe);
         });
     });
     
@@ -662,6 +905,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Escape') {
             hideModal();
             hideAnalyticsModal();
+            hideQueryAnalyticsModal();
         }
         
         if (e.ctrlKey || e.metaKey) {
