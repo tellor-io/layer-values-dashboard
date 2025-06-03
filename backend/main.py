@@ -1002,6 +1002,151 @@ async def get_query_analytics(
             
         raise HTTPException(status_code=500, detail=f"Query analytics processing failed: {str(e)}")
 
+@dashboard_app.get("/api/reporter-analytics")
+async def get_reporter_analytics(
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+):
+    """Get analytics data by reporter for different timeframes"""
+    try:
+        print(f"🔄 Reporter analytics request: timeframe={timeframe}")
+        current_time_ms = int(time.time() * 1000)
+        
+        # Add memory usage logging
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+        print(f"📊 Initial memory usage: {initial_memory:.1f} MB")
+        
+        # Use thread-safe database access
+        with db_lock:
+            if timeframe == "24h":
+                print("🕒 Processing 24h reporter analytics...")
+                # 2-hour intervals over past 24 hours
+                hours_24_ms = 24 * 60 * 60 * 1000
+                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
+                num_buckets = 12
+                start_time = current_time_ms - hours_24_ms
+                
+            elif timeframe == "7d":
+                print("📅 Processing 7d reporter analytics...")
+                # Daily intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 7
+                start_time = current_time_ms - days_7_ms
+                
+            elif timeframe == "30d":
+                print("📊 Processing 30d reporter analytics...")
+                # 3-day intervals over past 30 days
+                days_30_ms = 30 * 24 * 60 * 60 * 1000
+                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
+                num_buckets = 10
+                start_time = current_time_ms - days_30_ms
+            
+            print(f"📈 Querying reporter data from {start_time} to {current_time_ms}")
+            
+            # Get top reporters in the timeframe
+            top_reporters = conn.execute("""
+                SELECT REPORTER, COUNT(*) as count 
+                FROM layer_data 
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ?
+                GROUP BY REPORTER 
+                ORDER BY count DESC 
+                LIMIT 15
+            """, [start_time, current_time_ms]).fetchall()
+            
+            if not top_reporters:
+                return {
+                    "timeframe": timeframe,
+                    "title": f"Reports by Reporter (Past {timeframe})",
+                    "data": [],
+                    "reporters": []
+                }
+            
+            print(f"🔍 Found {len(top_reporters)} top reporters")
+            
+            # Get time series data for each reporter
+            reporter_data = {}
+            reporter_list = []
+            
+            for reporter_row in top_reporters:
+                reporter = reporter_row[0]
+                reporter_list.append({
+                    "address": reporter,
+                    "total_count": reporter_row[1],
+                    "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                })
+                
+                # Get bucketed data for this reporter
+                results = conn.execute("""
+                    WITH time_buckets AS (
+                        SELECT 
+                            TIMESTAMP,
+                            FLOOR((TIMESTAMP - ?) / ?) as bucket_id
+                        FROM layer_data 
+                        WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                        AND REPORTER = ?
+                    )
+                    SELECT 
+                        bucket_id,
+                        COUNT(*) as count
+                    FROM time_buckets
+                    GROUP BY bucket_id
+                    ORDER BY bucket_id
+                """, [start_time, interval_ms, start_time, current_time_ms, reporter]).fetchall()
+                
+                # Create complete time series for this reporter
+                buckets = []
+                for i in range(num_buckets):
+                    bucket_start = start_time + (i * interval_ms)
+                    
+                    # Find matching result
+                    count = 0
+                    for result in results:
+                        if result[0] == i:
+                            count = result[1]
+                            break
+                    
+                    buckets.append(count)
+                
+                reporter_data[reporter] = buckets
+            
+            # Generate time labels
+            time_labels = []
+            for i in range(num_buckets):
+                bucket_start = start_time + (i * interval_ms)
+                dt = pd.to_datetime(bucket_start, unit='ms')
+                
+                if timeframe == "24h":
+                    time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d'))
+                elif timeframe == "30d":
+                    time_labels.append(dt.strftime('%m/%d'))
+            
+            return {
+                "timeframe": timeframe,
+                "title": f"Reports by Reporter (Past {timeframe})",
+                "time_labels": time_labels,
+                "reporters": reporter_list,
+                "data": reporter_data
+            }
+            
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"❌ Reporter analytics error: {str(e)}")
+        print(f"📋 Full traceback:\n{error_details}")
+        
+        # Log memory state on error
+        try:
+            process = psutil.Process()
+            current_memory = process.memory_info().rss / 1024 / 1024  # MB
+            print(f"📊 Memory usage at error: {current_memory:.1f} MB")
+        except:
+            pass
+            
+        raise HTTPException(status_code=500, detail=f"Reporter analytics processing failed: {str(e)}")
+
 # Mount static files for dashboard
 dashboard_app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 

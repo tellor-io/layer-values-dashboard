@@ -17,6 +17,7 @@ const elements = {
     
     // Stats cards
     uniqueReporters: document.getElementById('unique-reporters'),
+    uniqueReportersCard: document.getElementById('unique-reporters-card'),
     uniqueQueryIds30d: document.getElementById('unique-query-ids-30d'),
     queryIdsCard: document.getElementById('query-ids-card'),
     totalReporterPower: document.getElementById('total-reporter-power'),
@@ -67,7 +68,15 @@ const elements = {
     queryAnalyticsTitle: document.getElementById('query-analytics-title'),
     queryAnalyticsChart: document.getElementById('query-analytics-chart'),
     queryAnalyticsLoading: document.getElementById('query-analytics-loading'),
-    queryLegend: document.getElementById('query-legend')
+    queryLegend: document.getElementById('query-legend'),
+    
+    // Reporter analytics modal
+    reporterAnalyticsModal: document.getElementById('reporter-analytics-modal'),
+    reporterAnalyticsModalClose: document.getElementById('reporter-analytics-modal-close'),
+    reporterAnalyticsTitle: document.getElementById('reporter-analytics-title'),
+    reporterAnalyticsChart: document.getElementById('reporter-analytics-chart'),
+    reporterAnalyticsLoading: document.getElementById('reporter-analytics-loading'),
+    reporterLegend: document.getElementById('reporter-legend')
 };
 
 // Utility functions
@@ -783,6 +792,213 @@ const createQueryLegend = (data) => {
     });
 };
 
+// Reporter Analytics functionality
+let reporterAnalyticsChart = null;
+let hiddenReporters = new Set();
+
+const showReporterAnalyticsModal = () => {
+    elements.reporterAnalyticsModal.classList.add('show');
+    loadReporterAnalytics('24h'); // Default to 24h view
+};
+
+const hideReporterAnalyticsModal = () => {
+    elements.reporterAnalyticsModal.classList.remove('show');
+    if (reporterAnalyticsChart) {
+        reporterAnalyticsChart.destroy();
+        reporterAnalyticsChart = null;
+    }
+    hiddenReporters.clear();
+};
+
+const loadReporterAnalytics = async (timeframe) => {
+    try {
+        // Show loading
+        elements.reporterAnalyticsLoading.style.display = 'flex';
+        
+        // Update active button in reporter analytics modal
+        const reporterButtons = elements.reporterAnalyticsModal.querySelectorAll('.analytics-btn');
+        reporterButtons.forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.timeframe === timeframe) {
+                btn.classList.add('active');
+            }
+        });
+        
+        // Fetch reporter analytics data
+        const data = await apiCall('/reporter-analytics', { timeframe });
+        
+        // Update title
+        elements.reporterAnalyticsTitle.textContent = data.title;
+        
+        // Create or update chart
+        createReporterAnalyticsChart(data);
+        
+        // Create legend
+        createReporterLegend(data);
+        
+    } catch (error) {
+        console.error('Failed to load reporter analytics:', error);
+        elements.reporterAnalyticsTitle.textContent = 'Failed to load reporter analytics';
+    } finally {
+        // Hide loading
+        elements.reporterAnalyticsLoading.style.display = 'none';
+    }
+};
+
+const createReporterAnalyticsChart = (data) => {
+    const ctx = elements.reporterAnalyticsChart.getContext('2d');
+    
+    // Destroy existing chart
+    if (reporterAnalyticsChart) {
+        reporterAnalyticsChart.destroy();
+    }
+    
+    if (!data.reporters || data.reporters.length === 0) {
+        // Show "No data" message
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = '16px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('No data available for this timeframe', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+    }
+    
+    // Generate colors for each reporter
+    const colors = generateColors(data.reporters.length);
+    
+    // Prepare datasets
+    const datasets = data.reporters.map((reporterInfo, index) => {
+        const isHidden = hiddenReporters.has(reporterInfo.address);
+        return {
+            label: reporterInfo.short_name,
+            data: data.data[reporterInfo.address] || [],
+            borderColor: colors[index],
+            backgroundColor: `${colors[index]}20`,
+            borderWidth: 2,
+            fill: false,
+            tension: 0.4,
+            pointBackgroundColor: colors[index],
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            hidden: isHidden,
+            reporterAddress: reporterInfo.address,
+            totalCount: reporterInfo.total_count
+        };
+    });
+    
+    reporterAnalyticsChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.time_labels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false // We'll use our custom legend
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        title: function(context) {
+                            return `Time: ${context[0].label}`;
+                        },
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            return `${dataset.label}: ${context.formattedValue} reports`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: '#00d4ff',
+                        maxTicksLimit: 8
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    }
+                },
+                y: {
+                    ticks: {
+                        color: '#00d4ff',
+                        beginAtZero: true
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    }
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            }
+        }
+    });
+};
+
+const createReporterLegend = (data) => {
+    if (!data.reporters || data.reporters.length === 0) {
+        elements.reporterLegend.innerHTML = '<p class="no-data">No reporters found for this timeframe</p>';
+        return;
+    }
+    
+    const colors = generateColors(data.reporters.length);
+    
+    const legendItems = data.reporters.map((reporterInfo, index) => {
+        const isHidden = hiddenReporters.has(reporterInfo.address);
+        return `
+            <div class="legend-item ${isHidden ? 'hidden' : ''}" data-reporter-address="${reporterInfo.address}">
+                <div class="legend-color" style="background-color: ${colors[index]}"></div>
+                <div class="legend-text">
+                    <div class="legend-label" title="${reporterInfo.address}">${reporterInfo.short_name}</div>
+                    <div class="legend-count">${reporterInfo.total_count} reports</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    elements.reporterLegend.innerHTML = `
+        <div class="legend-header">
+            <h4>Reporters (click to toggle)</h4>
+        </div>
+        <div class="legend-items">
+            ${legendItems}
+        </div>
+    `;
+    
+    // Add click handlers for legend items
+    elements.reporterLegend.querySelectorAll('.legend-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const reporterAddress = item.dataset.reporterAddress;
+            
+            if (hiddenReporters.has(reporterAddress)) {
+                hiddenReporters.delete(reporterAddress);
+                item.classList.remove('hidden');
+            } else {
+                hiddenReporters.add(reporterAddress);
+                item.classList.add('hidden');
+            }
+            
+            // Update chart
+            if (reporterAnalyticsChart) {
+                reporterAnalyticsChart.data.datasets.forEach(dataset => {
+                    if (dataset.reporterAddress === reporterAddress) {
+                        dataset.hidden = hiddenReporters.has(reporterAddress);
+                    }
+                });
+                reporterAnalyticsChart.update();
+            }
+        });
+    });
+};
+
 // Event listeners
 document.addEventListener('DOMContentLoaded', async () => {
     // Set and display load time
@@ -797,6 +1013,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Query analytics card click
     elements.queryIdsCard.addEventListener('click', showQueryAnalyticsModal);
+    
+    // Reporter analytics card click
+    elements.uniqueReportersCard.addEventListener('click', showReporterAnalyticsModal);
     
     // Questionable values card click
     elements.questionableCard.addEventListener('click', showQuestionableValues);
@@ -900,12 +1119,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
     
+    // Reporter Analytics modal functionality
+    elements.reporterAnalyticsModalClose.addEventListener('click', hideReporterAnalyticsModal);
+    
+    elements.reporterAnalyticsModal.addEventListener('click', (e) => {
+        if (e.target === elements.reporterAnalyticsModal) {
+            hideReporterAnalyticsModal();
+        }
+    });
+    
+    // Reporter Analytics timeframe buttons
+    elements.reporterAnalyticsModal.querySelectorAll('.analytics-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const timeframe = btn.dataset.timeframe;
+            loadReporterAnalytics(timeframe);
+        });
+    });
+    
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             hideModal();
             hideAnalyticsModal();
             hideQueryAnalyticsModal();
+            hideReporterAnalyticsModal();
         }
         
         if (e.ctrlKey || e.metaKey) {

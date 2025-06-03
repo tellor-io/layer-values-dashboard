@@ -55,13 +55,14 @@
             <!-- Stats Dashboard -->
             <div class="stats-dashboard">
                 <div class="stats-grid">
-                    <div class="stat-card">
+                    <div class="stat-card clickable" id="unique-reporters-card">
                         <div class="stat-icon">
                             <i class="fas fa-users"></i>
                         </div>
                         <div class="stat-content">
                             <div class="stat-number" id="unique-reporters">-</div>
                             <div class="stat-title">Unique Reporters</div>
+                            <div class="stat-subtitle">Click to view analytics</div>
                         </div>
                     </div>
                     <div class="stat-card clickable" id="query-ids-card">
@@ -256,6 +257,41 @@
                     <div class="analytics-loading" id="query-analytics-loading" style="display: none;">
                         <div class="spinner"></div>
                         <div class="loading-text">Loading query analytics...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reporter Analytics Modal -->
+        <div class="modal" id="reporter-analytics-modal">
+            <div class="modal-content analytics-modal-content">
+                <div class="modal-header">
+                    <h3 id="reporter-analytics-title">Reports by Reporter</h3>
+                    <button class="modal-close" id="reporter-analytics-modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body analytics-modal-body">
+                    <div class="analytics-controls">
+                        <button class="analytics-btn active" data-timeframe="24h">
+                            <i class="fas fa-clock"></i> 24h
+                        </button>
+                        <button class="analytics-btn" data-timeframe="7d">
+                            <i class="fas fa-calendar-week"></i> 7d
+                        </button>
+                        <button class="analytics-btn" data-timeframe="30d">
+                            <i class="fas fa-calendar"></i> 30d
+                        </button>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="reporter-analytics-chart"></canvas>
+                    </div>
+                    <div class="reporter-legend" id="reporter-legend">
+                        <!-- Legend will be populated here -->
+                    </div>
+                    <div class="analytics-loading" id="reporter-analytics-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Loading reporter analytics...</div>
                     </div>
                 </div>
             </div>
