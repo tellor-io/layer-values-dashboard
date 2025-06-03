@@ -21,6 +21,7 @@ const elements = {
     uniqueQueryIds30d: document.getElementById('unique-query-ids-30d'),
     queryIdsCard: document.getElementById('query-ids-card'),
     totalReporterPower: document.getElementById('total-reporter-power'),
+    totalReporterPowerCard: document.getElementById('total-reporter-power-card'),
     recentActivity: document.getElementById('recent-activity'),
     recentActivityCard: document.getElementById('recent-activity-card'),
     questionableValues: document.getElementById('questionable-values'),
@@ -76,7 +77,19 @@ const elements = {
     reporterAnalyticsTitle: document.getElementById('reporter-analytics-title'),
     reporterAnalyticsChart: document.getElementById('reporter-analytics-chart'),
     reporterAnalyticsLoading: document.getElementById('reporter-analytics-loading'),
-    reporterLegend: document.getElementById('reporter-legend')
+    reporterLegend: document.getElementById('reporter-legend'),
+    
+    // Power analytics modal
+    powerAnalyticsModal: document.getElementById('power-analytics-modal'),
+    powerAnalyticsModalClose: document.getElementById('power-analytics-modal-close'),
+    powerAnalyticsTitle: document.getElementById('power-analytics-title'),
+    powerAnalyticsChart: document.getElementById('power-analytics-chart'),
+    powerAnalyticsLoading: document.getElementById('power-analytics-loading'),
+    powerLegend: document.getElementById('power-legend'),
+    absentReportersSection: document.getElementById('absent-reporters-section'),
+    absentReportersList: document.getElementById('absent-reporters-list'),
+    queryIdSelect: document.getElementById('query-id-select'),
+    powerInfo: document.getElementById('power-info')
 };
 
 // Utility functions
@@ -999,6 +1012,311 @@ const createReporterLegend = (data) => {
     });
 };
 
+// Power Analytics functionality
+let powerAnalyticsChart = null;
+let hiddenPowerSlices = new Set();
+
+const showPowerAnalyticsModal = () => {
+    elements.powerAnalyticsModal.classList.add('show');
+    loadPowerAnalytics();
+};
+
+const hidePowerAnalyticsModal = () => {
+    elements.powerAnalyticsModal.classList.remove('show');
+    if (powerAnalyticsChart) {
+        powerAnalyticsChart.destroy();
+        powerAnalyticsChart = null;
+    }
+    hiddenPowerSlices.clear();
+};
+
+const loadPowerAnalytics = async (queryId = null) => {
+    try {
+        // Show loading
+        elements.powerAnalyticsLoading.style.display = 'flex';
+        
+        // Build API call parameters
+        const params = {};
+        if (queryId) {
+            params.query_id = queryId;
+        }
+        
+        // Fetch power analytics data
+        const data = await apiCall('/reporter-power-analytics', params);
+        
+        // Update title
+        elements.powerAnalyticsTitle.textContent = data.title;
+        
+        // Populate query ID selector if not already done
+        if (data.query_ids_24h && data.query_ids_24h.length > 0) {
+            const currentValue = elements.queryIdSelect.value;
+            elements.queryIdSelect.innerHTML = '<option value="">Overall (All Query IDs)</option>';
+            
+            data.query_ids_24h.forEach(queryInfo => {
+                const option = document.createElement('option');
+                option.value = queryInfo.id;
+                option.textContent = `${queryInfo.short_name} (${queryInfo.report_count} reports, ${queryInfo.unique_reporters} reporters)`;
+                option.title = queryInfo.id; // Full query ID on hover
+                elements.queryIdSelect.appendChild(option);
+            });
+            
+            // Set the selected value
+            elements.queryIdSelect.value = data.selected_query_id || '';
+        }
+        
+        // Display power info
+        showPowerInfo(data);
+        
+        // Create pie chart
+        createPowerAnalyticsChart(data);
+        
+        // Create legend
+        createPowerLegend(data);
+        
+        // Show absent reporters
+        showAbsentReporters(data);
+        
+    } catch (error) {
+        console.error('Failed to load power analytics:', error);
+        elements.powerAnalyticsTitle.textContent = 'Failed to load power analytics';
+    } finally {
+        // Hide loading
+        elements.powerAnalyticsLoading.style.display = 'none';
+    }
+};
+
+const showPowerInfo = (data) => {
+    let infoHTML = '';
+    
+    // Show error message if present
+    if (data.error) {
+        infoHTML += `
+            <div class="info-error">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span>${data.error}</span>
+            </div>
+        `;
+        elements.powerInfo.innerHTML = infoHTML;
+        return;
+    }
+    
+    // Show timestamp info
+    if (data.target_timestamp) {
+        const timestampDate = new Date(data.target_timestamp);
+        const timestampNote = data.selected_query_id 
+            ? "(Most recent block for this query ID)" 
+            : "(Using 2nd most recent block for stability)";
+        
+        infoHTML += `
+            <div class="info-item">
+                <span class="info-label">Data Timestamp:</span>
+                <span class="info-value">${timestampDate.toLocaleString()}</span>
+                <span class="info-note">${timestampNote}</span>
+            </div>
+        `;
+    }
+    
+    // Show query-specific info if available
+    if (data.query_info) {
+        const qi = data.query_info;
+        infoHTML += `
+            <div class="query-info-grid">
+                <div class="info-item">
+                    <span class="info-label">Query Type:</span>
+                    <span class="info-value">${qi.query_type}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Reports:</span>
+                    <span class="info-value">${qi.total_reports}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Unique Reporters:</span>
+                    <span class="info-value">${qi.unique_reporters}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Avg Value:</span>
+                    <span class="info-value">${formatValue(qi.avg_value)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Value Range:</span>
+                    <span class="info-value">${formatValue(qi.min_value)} - ${formatValue(qi.max_value)}</span>
+                </div>
+            </div>
+        `;
+    }
+    
+    // Show total power
+    infoHTML += `
+        <div class="info-item">
+            <span class="info-label">Total Power:</span>
+            <span class="info-value highlight">${formatNumber(data.total_power)}</span>
+        </div>
+    `;
+    
+    elements.powerInfo.innerHTML = infoHTML;
+};
+
+const createPowerAnalyticsChart = (data) => {
+    const ctx = elements.powerAnalyticsChart.getContext('2d');
+    
+    // Destroy existing chart
+    if (powerAnalyticsChart) {
+        powerAnalyticsChart.destroy();
+    }
+    
+    if (!data.power_data || data.power_data.length === 0) {
+        // Show "No data" message
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = '16px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('No power data available', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+    }
+    
+    // Generate colors for each slice
+    const colors = generateColors(data.power_data.length);
+    
+    // Prepare data for pie chart
+    const labels = data.power_data.map(item => item.short_name);
+    const powers = data.power_data.map(item => item.power);
+    const backgroundColors = colors.map((color, index) => {
+        const isHidden = hiddenPowerSlices.has(data.power_data[index].reporter);
+        return isHidden ? '#333344' : color;
+    });
+    
+    powerAnalyticsChart = new Chart(ctx, {
+        type: 'pie',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: powers,
+                backgroundColor: backgroundColors,
+                borderColor: '#1a1a2e',
+                borderWidth: 2,
+                hoverBorderWidth: 3,
+                hoverBorderColor: '#00ff88'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false // We'll use our custom legend
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const reporter = data.power_data[context.dataIndex];
+                            const percentage = ((reporter.power / data.total_power) * 100).toFixed(1);
+                            return `${reporter.short_name}: ${formatNumber(reporter.power)} (${percentage}%)`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+};
+
+const createPowerLegend = (data) => {
+    if (!data.power_data || data.power_data.length === 0) {
+        elements.powerLegend.innerHTML = '<p class="no-data">No power data available</p>';
+        return;
+    }
+    
+    const colors = generateColors(data.power_data.length);
+    
+    const legendItems = data.power_data.map((reporterInfo, index) => {
+        const isHidden = hiddenPowerSlices.has(reporterInfo.reporter);
+        const percentage = ((reporterInfo.power / data.total_power) * 100).toFixed(1);
+        
+        // Show additional info if we have query-specific data
+        let additionalInfo = '';
+        if (reporterInfo.value !== undefined) {
+            additionalInfo = `
+                <div class="legend-extra">
+                    <span class="legend-value">Value: ${formatValue(reporterInfo.value)}</span>
+                    ${reporterInfo.trusted_value !== undefined ? 
+                        `<span class="legend-trusted">Trusted: ${formatValue(reporterInfo.trusted_value)}</span>` : ''
+                    }
+                </div>
+            `;
+        }
+        
+        return `
+            <div class="legend-item ${isHidden ? 'hidden' : ''}" data-reporter-address="${reporterInfo.reporter}">
+                <div class="legend-color" style="background-color: ${colors[index]}"></div>
+                <div class="legend-text">
+                    <div class="legend-label" title="${reporterInfo.reporter}">${reporterInfo.short_name}</div>
+                    <div class="legend-count">${formatNumber(reporterInfo.power)} (${percentage}%)</div>
+                    ${additionalInfo}
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    elements.powerLegend.innerHTML = `
+        <div class="legend-header">
+            <h4>Reporter Power Distribution (click to toggle)</h4>
+            <p class="legend-subtitle">Total Power: ${formatNumber(data.total_power)}</p>
+        </div>
+        <div class="legend-items power-legend-items">
+            ${legendItems}
+        </div>
+    `;
+    
+    // Add click handlers for legend items
+    elements.powerLegend.querySelectorAll('.legend-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const reporterAddress = item.dataset.reporterAddress;
+            
+            if (hiddenPowerSlices.has(reporterAddress)) {
+                hiddenPowerSlices.delete(reporterAddress);
+                item.classList.remove('hidden');
+            } else {
+                hiddenPowerSlices.add(reporterAddress);
+                item.classList.add('hidden');
+            }
+            
+            // Update chart colors
+            if (powerAnalyticsChart) {
+                const colors = generateColors(data.power_data.length);
+                const newBackgroundColors = colors.map((color, index) => {
+                    const isHidden = hiddenPowerSlices.has(data.power_data[index].reporter);
+                    return isHidden ? '#333344' : color;
+                });
+                
+                powerAnalyticsChart.data.datasets[0].backgroundColor = newBackgroundColors;
+                powerAnalyticsChart.update();
+            }
+        });
+    });
+};
+
+const showAbsentReporters = (data) => {
+    if (!data.absent_reporters || data.absent_reporters.length === 0) {
+        elements.absentReportersList.innerHTML = '<p class="no-absent-reporters">No absent reporters - all recent reporters participated in the latest round!</p>';
+        return;
+    }
+    
+    const absentItems = data.absent_reporters.map(reporter => {
+        const timeAgo = formatTimeAgo(reporter.last_report_time);
+        return `
+            <div class="absent-reporter-item">
+                <div class="absent-reporter-info">
+                    <div class="absent-reporter-address" title="${reporter.reporter}">${reporter.short_name}</div>
+                    <div class="absent-reporter-details">
+                        <span class="absent-reporter-power">Power: ${formatNumber(reporter.last_power)}</span>
+                        <span class="absent-reporter-time">Last seen: ${timeAgo}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    elements.absentReportersList.innerHTML = absentItems;
+};
+
 // Event listeners
 document.addEventListener('DOMContentLoaded', async () => {
     // Set and display load time
@@ -1016,6 +1334,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Reporter analytics card click
     elements.uniqueReportersCard.addEventListener('click', showReporterAnalyticsModal);
+    
+    // Power analytics card click
+    elements.totalReporterPowerCard.addEventListener('click', showPowerAnalyticsModal);
     
     // Questionable values card click
     elements.questionableCard.addEventListener('click', showQuestionableValues);
@@ -1136,6 +1457,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
     
+    // Power Analytics modal functionality
+    elements.powerAnalyticsModalClose.addEventListener('click', hidePowerAnalyticsModal);
+    
+    elements.powerAnalyticsModal.addEventListener('click', (e) => {
+        if (e.target === elements.powerAnalyticsModal) {
+            hidePowerAnalyticsModal();
+        }
+    });
+    
+    // Query ID selector for power analytics
+    elements.queryIdSelect.addEventListener('change', (e) => {
+        const selectedQueryId = e.target.value || null;
+        loadPowerAnalytics(selectedQueryId);
+    });
+    
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
@@ -1143,6 +1479,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             hideAnalyticsModal();
             hideQueryAnalyticsModal();
             hideReporterAnalyticsModal();
+            hidePowerAnalyticsModal();
         }
         
         if (e.ctrlKey || e.metaKey) {

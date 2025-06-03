@@ -1147,6 +1147,267 @@ async def get_reporter_analytics(
             
         raise HTTPException(status_code=500, detail=f"Reporter analytics processing failed: {str(e)}")
 
+@dashboard_app.get("/api/reporter-power-analytics")
+async def get_reporter_power_analytics(
+    query_id: Optional[str] = Query(None, description="Filter by specific query ID")
+):
+    """Get reporter power distribution and absent reporters"""
+    try:
+        print(f"🔄 Reporter power analytics request, query_id={query_id}")
+        current_time_ms = int(time.time() * 1000)
+        
+        # Add memory usage logging
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+        print(f"📊 Initial memory usage: {initial_memory:.1f} MB")
+        
+        # Use thread-safe database access
+        with db_lock:
+            # Get available query IDs from the past 24 hours for the selector
+            hours_24_ms = 24 * 60 * 60 * 1000
+            start_time_24h = current_time_ms - hours_24_ms
+            
+            query_ids_24h = conn.execute("""
+                SELECT 
+                    QUERY_ID,
+                    COUNT(*) as report_count,
+                    COUNT(DISTINCT REPORTER) as unique_reporters
+                FROM layer_data 
+                WHERE TIMESTAMP >= ?
+                GROUP BY QUERY_ID 
+                ORDER BY report_count DESC
+                LIMIT 20
+            """, [start_time_24h]).fetchall()
+            
+            query_ids_list = [{
+                "id": row[0],
+                "report_count": row[1],
+                "unique_reporters": row[2],
+                "short_name": row[0][:15] + "..." if len(row[0]) > 18 else row[0]
+            } for row in query_ids_24h]
+            
+            # Build the main query based on whether we're filtering by query ID
+            if query_id:
+                print(f"📊 Filtering by query ID: {query_id}")
+                
+                # Find recent timestamps where this specific query ID was reported
+                recent_query_timestamps = conn.execute("""
+                    SELECT DISTINCT TIMESTAMP 
+                    FROM layer_data 
+                    WHERE QUERY_ID = ?
+                    ORDER BY TIMESTAMP DESC 
+                    LIMIT 5
+                """, [query_id]).fetchall()
+                
+                if not recent_query_timestamps:
+                    return {
+                        "title": f"Reporter Power Distribution - {query_id[:20]}{'...' if len(query_id) > 20 else ''}",
+                        "power_data": [],
+                        "absent_reporters": [],
+                        "target_timestamp": None,
+                        "total_power": 0,
+                        "query_ids_24h": query_ids_list,
+                        "selected_query_id": query_id,
+                        "query_info": None,
+                        "error": f"No recent data found for query ID: {query_id}"
+                    }
+                
+                # Use the most recent timestamp for this specific query ID
+                # (since we're looking at a specific query, we can use the most recent)
+                target_timestamp = recent_query_timestamps[0][0]
+                print(f"📈 Using most recent timestamp for query {query_id}: {target_timestamp}")
+                
+                # Get power distribution for specific query ID at target timestamp
+                power_data_query = """
+                    SELECT 
+                        ld.REPORTER,
+                        ld.POWER,
+                        ld.VALUE,
+                        ld.TRUSTED_VALUE
+                    FROM layer_data ld
+                    WHERE ld.TIMESTAMP = ? AND ld.QUERY_ID = ?
+                    ORDER BY ld.POWER DESC
+                """
+                power_results = conn.execute(power_data_query, [target_timestamp, query_id]).fetchall()
+                
+                # Get query info
+                query_info = conn.execute("""
+                    SELECT 
+                        COUNT(*) as total_reports,
+                        COUNT(DISTINCT REPORTER) as unique_reporters,
+                        AVG(VALUE) as avg_value,
+                        MIN(VALUE) as min_value,
+                        MAX(VALUE) as max_value,
+                        QUERY_TYPE
+                    FROM layer_data 
+                    WHERE TIMESTAMP = ? AND QUERY_ID = ?
+                    GROUP BY QUERY_TYPE
+                """, [target_timestamp, query_id]).fetchone()
+                
+                if query_info:
+                    query_info_dict = {
+                        "total_reports": query_info[0],
+                        "unique_reporters": query_info[1],
+                        "avg_value": query_info[2],
+                        "min_value": query_info[3],
+                        "max_value": query_info[4],
+                        "query_type": query_info[5]
+                    }
+                else:
+                    query_info_dict = None
+                
+                title = f"Reporter Power Distribution - {query_id[:20]}{'...' if len(query_id) > 20 else ''}"
+                
+            else:
+                print(f"📊 Getting overall power distribution")
+                
+                # For overall view, use second most recent timestamp to avoid incomplete blocks
+                # Get the second most recent timestamp to avoid incomplete blocks
+                recent_timestamps = conn.execute("""
+                    SELECT DISTINCT TIMESTAMP 
+                    FROM layer_data 
+                    ORDER BY TIMESTAMP DESC 
+                    LIMIT 2
+                """).fetchall()
+                
+                if len(recent_timestamps) < 2:
+                    # If we only have one timestamp, use it but warn
+                    if len(recent_timestamps) == 1:
+                        target_timestamp = recent_timestamps[0][0]
+                        print(f"⚠️  Only one timestamp available for overall view, using: {target_timestamp}")
+                    else:
+                        return {
+                            "title": "Reporter Power Distribution (Overall)",
+                            "power_data": [],
+                            "absent_reporters": [],
+                            "target_timestamp": None,
+                            "total_power": 0,
+                            "query_ids_24h": query_ids_list,
+                            "selected_query_id": query_id,
+                            "query_info": None,
+                            "error": "No timestamp data available"
+                        }
+                else:
+                    # Use second most recent timestamp for stability
+                    target_timestamp = recent_timestamps[1][0]
+                    print(f"📈 Using second most recent timestamp for overall view: {target_timestamp}")
+                
+                # Get overall power distribution at target timestamp
+                power_data_query = """
+                    SELECT 
+                        ld.REPORTER,
+                        ld.POWER
+                    FROM layer_data ld
+                    WHERE ld.TIMESTAMP = ?
+                    ORDER BY ld.POWER DESC
+                """
+                power_results = conn.execute(power_data_query, [target_timestamp]).fetchall()
+                query_info_dict = None
+                title = "Reporter Power Distribution (Overall)"
+            
+            if not power_results:
+                return {
+                    "title": title,
+                    "power_data": [],
+                    "absent_reporters": [],
+                    "target_timestamp": target_timestamp,
+                    "total_power": 0,
+                    "query_ids_24h": query_ids_list,
+                    "selected_query_id": query_id,
+                    "query_info": query_info_dict
+                }
+            
+            # Process power distribution
+            power_distribution = []
+            total_power = 0
+            
+            for row in power_results:
+                if query_id and len(row) >= 4:
+                    # With query ID filtering, we have VALUE and TRUSTED_VALUE
+                    reporter, power, value, trusted_value = row[:4]
+                    power_distribution.append({
+                        "reporter": reporter,
+                        "power": power,
+                        "value": value,
+                        "trusted_value": trusted_value,
+                        "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                    })
+                else:
+                    # Overall view, just reporter and power
+                    reporter, power = row[:2]
+                    power_distribution.append({
+                        "reporter": reporter,
+                        "power": power,
+                        "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                    })
+                total_power += power
+            
+            print(f"🔍 Found {len(power_distribution)} reporters with total power: {total_power}")
+            
+            # Get reporters who reported in the past hour but are absent from target timestamp
+            hour_ms = 60 * 60 * 1000
+            hour_ago = current_time_ms - hour_ms
+            
+            recent_reporters = conn.execute("""
+                SELECT DISTINCT REPORTER
+                FROM layer_data 
+                WHERE CURRENT_TIME >= ?
+            """, [hour_ago]).fetchall()
+            
+            recent_reporter_addresses = {row[0] for row in recent_reporters}
+            current_round_reporters = {item["reporter"] for item in power_distribution}
+            
+            # Find absent reporters
+            absent_reporters = []
+            for reporter_row in recent_reporters:
+                reporter = reporter_row[0]
+                if reporter not in current_round_reporters:
+                    # Get their last report info
+                    last_report = conn.execute("""
+                        SELECT POWER, CURRENT_TIME
+                        FROM layer_data 
+                        WHERE REPORTER = ?
+                        ORDER BY CURRENT_TIME DESC
+                        LIMIT 1
+                    """, [reporter]).fetchone()
+                    
+                    if last_report:
+                        absent_reporters.append({
+                            "reporter": reporter,
+                            "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter,
+                            "last_power": last_report[0],
+                            "last_report_time": last_report[1]
+                        })
+            
+            print(f"🚫 Found {len(absent_reporters)} absent reporters")
+            
+            return {
+                "title": title,
+                "power_data": power_distribution,
+                "absent_reporters": absent_reporters,
+                "target_timestamp": target_timestamp,
+                "total_power": total_power,
+                "query_ids_24h": query_ids_list,
+                "selected_query_id": query_id,
+                "query_info": query_info_dict
+            }
+            
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"❌ Reporter power analytics error: {str(e)}")
+        print(f"📋 Full traceback:\n{error_details}")
+        
+        # Log memory state on error
+        try:
+            process = psutil.Process()
+            current_memory = process.memory_info().rss / 1024 / 1024  # MB
+            print(f"📊 Memory usage at error: {current_memory:.1f} MB")
+        except:
+            pass
+            
+        raise HTTPException(status_code=500, detail=f"Reporter power analytics processing failed: {str(e)}")
+
 # Mount static files for dashboard
 dashboard_app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 
