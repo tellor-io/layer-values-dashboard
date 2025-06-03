@@ -3,19 +3,17 @@ let currentPage = 1;
 let currentFilters = {};
 let isLoading = false;
 let totalRecords = 0;
-let liveUpdateInterval = null;
-let isLiveUpdatesActive = false;
+let pageLoadTime = new Date(); // Store page load time
 
 // Configuration
 const RECORDS_PER_PAGE = 100;
-const API_BASE = '';
+const API_BASE = '/dashboard';
 
 // DOM elements
 const elements = {
     // Header stats
     totalRecords: document.getElementById('total-records'),
-    liveStatus: document.getElementById('live-status'),
-    liveToggle: document.getElementById('live-toggle'),
+    loadTimestamp: document.getElementById('load-timestamp'),
     
     // Stats cards
     uniqueReporters: document.getElementById('unique-reporters'),
@@ -135,48 +133,16 @@ const hideModal = () => {
     elements.detailModal.classList.remove('show');
 };
 
-const toggleLiveUpdates = async () => {
-    if (isLiveUpdatesActive) {
-        // Pause live updates
-        if (liveUpdateInterval) {
-            clearInterval(liveUpdateInterval);
-            liveUpdateInterval = null;
-        }
-        isLiveUpdatesActive = false;
-        
-        // Update UI
-        elements.liveToggle.innerHTML = '<i class="fas fa-play"></i>';
-        elements.liveToggle.classList.add('paused');
-        elements.liveToggle.title = 'Start live updates';
-        document.querySelector('.status-indicator').classList.add('paused');
-        
-    } else {
-        // Start live updates
-        isLiveUpdatesActive = true;
-        
-        // Start the interval
-        liveUpdateInterval = setInterval(async () => {
-            try {
-                await loadStats();
-                // Only refresh current view if no filters are active
-                if (Object.keys(currentFilters).length === 0) {
-                    await loadData(currentPage, currentFilters);
-                }
-            } catch (error) {
-                console.error('Live update failed:', error);
-            }
-        }, 5000); // Update every 5 seconds
-        
-        // Update UI
-        elements.liveToggle.innerHTML = '<i class="fas fa-pause"></i>';
-        elements.liveToggle.classList.remove('paused');
-        elements.liveToggle.title = 'Pause live updates';
-        document.querySelector('.status-indicator').classList.remove('paused');
-        
-        // Immediately refresh the data
-        await loadStats();
-        await loadData(currentPage, currentFilters);
-    }
+const updateLoadTime = () => {
+    const timeString = pageLoadTime.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    });
+    elements.loadTimestamp.textContent = timeString;
 };
 
 // API functions
@@ -561,8 +527,7 @@ const createAnalyticsChart = (data) => {
                 x: {
                     ticks: {
                         color: '#00d4ff',
-                        maxTicksLimit: data.timeframe === 'weekly' ? 24 : 
-                                       data.timeframe === 'yearly' ? 12 : 12
+                        maxTicksLimit: data.timeframe === 'weekly' ? 8 : 12,
                     },
                     grid: {
                         color: 'rgba(51, 51, 68, 0.5)'
@@ -589,24 +554,12 @@ const createAnalyticsChart = (data) => {
 
 // Event listeners
 document.addEventListener('DOMContentLoaded', async () => {
+    // Set and display load time
+    updateLoadTime();
+    
     // Initial load
     await loadStats();
     await loadData();
-    
-    // Setup live updates only if active
-    if (isLiveUpdatesActive) {
-        liveUpdateInterval = setInterval(async () => {
-            try {
-                await loadStats();
-                // Only refresh current view if no filters are active
-                if (Object.keys(currentFilters).length === 0) {
-                    await loadData(currentPage, currentFilters);
-                }
-            } catch (error) {
-                console.error('Live update failed:', error);
-            }
-        }, 5000); // Update every 5 seconds
-    }
     
     // Analytics card click
     elements.recentActivityCard.addEventListener('click', showAnalyticsModal);
@@ -669,11 +622,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Refresh button
     elements.refreshData.addEventListener('click', () => {
+        // Update load time when refreshing
+        pageLoadTime = new Date();
+        updateLoadTime();
+        
+        // Refresh data and stats
+        loadStats();
         loadData(currentPage, currentFilters);
     });
-    
-    // Live updates toggle
-    elements.liveToggle.addEventListener('click', toggleLiveUpdates);
     
     // Modal functionality
     elements.modalClose.addEventListener('click', hideModal);
@@ -716,6 +672,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     break;
                 case 'r':
                     e.preventDefault();
+                    // Update load time when refreshing via keyboard
+                    pageLoadTime = new Date();
+                    updateLoadTime();
+                    loadStats();
                     loadData(currentPage, currentFilters);
                     break;
             }
