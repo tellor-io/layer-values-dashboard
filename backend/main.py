@@ -667,7 +667,7 @@ async def get_stats():
 
 @dashboard_app.get("/api/analytics")
 async def get_analytics(
-    timeframe: str = Query(..., regex="^(hourly|daily|weekly)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get analytics data for different timeframes"""
     try:
@@ -681,13 +681,12 @@ async def get_analytics(
         
         # Use thread-safe database access
         with db_lock:
-            if timeframe == "hourly":
-                print("🕒 Processing hourly analytics...")
-                # 30-minute intervals over past 24 hours
+            if timeframe == "24h":
+                print("🕒 Processing 24h analytics...")
+                # 1-hour intervals over past 24 hours
                 hours_24_ms = 24 * 60 * 60 * 1000
-                interval_ms = 30 * 60 * 1000  # 30 minutes
-                
-                # Use single query instead of loop for better performance
+                interval_ms = 1 * 60 * 60 * 1000  # 1 hour
+                num_buckets = 24
                 start_time = current_time_ms - hours_24_ms
                 
                 print(f"📈 Querying data from {start_time} to {current_time_ms}")
@@ -714,7 +713,7 @@ async def get_analytics(
                 
                 # Generate complete buckets (including empty ones)
                 buckets = []
-                for i in range(48):  # 24 hours * 2 (30-min intervals)
+                for i in range(num_buckets):
                     bucket_start = start_time + (i * interval_ms)
                     
                     # Find matching result
@@ -731,18 +730,18 @@ async def get_analytics(
                     })
                 
                 return {
-                    "timeframe": "hourly",
-                    "title": "Reports per 30 minutes (Past 24 hours)",
+                    "timeframe": "24h",
+                    "title": "Reports per hour (Past 24 hours)",
                     "data": buckets
                 }
                 
-            elif timeframe == "daily":
-                print("📅 Processing daily analytics...")
-                # Daily counts over past 30 days
-                days_30_ms = 30 * 24 * 60 * 60 * 1000
+            elif timeframe == "7d":
+                print("📅 Processing 7d analytics...")
+                # Daily counts over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
                 day_ms = 24 * 60 * 60 * 1000
                 
-                start_time = current_time_ms - days_30_ms
+                start_time = current_time_ms - days_7_ms
                 print(f"📈 Querying daily data from {start_time} to {current_time_ms}")
                 
                 # Single query approach
@@ -766,7 +765,7 @@ async def get_analytics(
                 print(f"🔍 Found {len(results)} daily buckets")
                 
                 buckets = []
-                for i in range(30):
+                for i in range(7):
                     bucket_start = start_time + (i * day_ms)
                     
                     count = 0
@@ -782,19 +781,19 @@ async def get_analytics(
                     })
                 
                 return {
-                    "timeframe": "daily", 
-                    "title": "Reports per day (Past 30 days)",
+                    "timeframe": "7d", 
+                    "title": "Reports per day (Past 7 days)",
                     "data": buckets
                 }
                 
-            elif timeframe == "weekly":
-                print("📊 Processing weekly analytics...")
-                # Hourly counts over past week
-                week_ms = 7 * 24 * 60 * 60 * 1000
-                hour_ms = 60 * 60 * 1000
+            elif timeframe == "30d":
+                print("📊 Processing 30d analytics...")
+                # 3-day intervals over past 30 days
+                days_30_ms = 30 * 24 * 60 * 60 * 1000
+                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
                 
-                start_time = current_time_ms - week_ms
-                print(f"📈 Querying weekly data from {start_time} to {current_time_ms}")
+                start_time = current_time_ms - days_30_ms
+                print(f"📈 Querying 30d data from {start_time} to {current_time_ms}")
                 
                 # Single query approach
                 results = conn.execute("""
@@ -812,13 +811,13 @@ async def get_analytics(
                     FROM time_buckets
                     GROUP BY bucket_id
                     ORDER BY bucket_id
-                """, [start_time, hour_ms, start_time, current_time_ms]).fetchall()
+                """, [start_time, interval_ms, start_time, current_time_ms]).fetchall()
                 
-                print(f"🔍 Found {len(results)} hourly buckets")
+                print(f"🔍 Found {len(results)} interval buckets")
                 
                 buckets = []
-                for i in range(168):  # 7 days * 24 hours
-                    bucket_start = start_time + (i * hour_ms)
+                for i in range(10):  # 30 days / 3 day intervals = 10 buckets
+                    bucket_start = start_time + (i * interval_ms)
                     
                     count = 0
                     for result in results:
@@ -826,20 +825,15 @@ async def get_analytics(
                             count = result[1]
                             break
                     
-                    # Format as "Day HH:00" - revert to original simple format
-                    dt = pd.to_datetime(bucket_start, unit='ms')
-                    day_name = dt.strftime('%a')
-                    hour = dt.strftime('%H:00')
-                    
                     buckets.append({
                         "time": bucket_start,
-                        "time_label": f"{day_name} {hour}",
+                        "time_label": pd.to_datetime(bucket_start, unit='ms').strftime('%m/%d'),
                         "count": count
                     })
                 
                 return {
-                    "timeframe": "weekly",
-                    "title": "Reports per hour (Past 7 days)", 
+                    "timeframe": "30d",
+                    "title": "Reports per 3 days (Past 30 days)", 
                     "data": buckets
                 }
             

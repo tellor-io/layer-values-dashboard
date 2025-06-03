@@ -519,7 +519,7 @@ let analyticsChart = null;
 
 const showAnalyticsModal = () => {
     elements.analyticsModal.classList.add('show');
-    loadAnalytics('hourly'); // Default to hourly view
+    loadAnalytics('24h'); // Default to 24h view
 };
 
 const hideAnalyticsModal = () => {
@@ -678,7 +678,7 @@ const loadQueryAnalytics = async (timeframe) => {
         // Create legend
         createQueryLegend(data);
         
-    } catch (error) {
+            } catch (error) {
         console.error('Failed to load query analytics:', error);
         elements.queryAnalyticsTitle.textContent = 'Failed to load query analytics';
     } finally {
@@ -1686,6 +1686,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.target === elements.analyticsModal) {
             hideAnalyticsModal();
         }
+    });
+    
+    // Analytics timeframe buttons
+    elements.analyticsModal.querySelectorAll('.analytics-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const timeframe = btn.dataset.timeframe;
+            loadAnalytics(timeframe);
+        });
     });
     
     // Query Analytics modal functionality
