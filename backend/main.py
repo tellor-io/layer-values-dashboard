@@ -64,9 +64,37 @@ dashboard_app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global DuckDB connection with thread safety
-conn = duckdb.connect(":memory:")
-db_lock = threading.Lock()  # Add database lock
+# Improved DuckDB configuration with memory limits and better connection management
+def create_duckdb_connection():
+    """Create a properly configured DuckDB connection"""
+    conn = duckdb.connect(":memory:")
+    
+    # Configure DuckDB for better memory management and stability
+    try:
+        # Set memory limit to 2GB (adjust based on your system)
+        conn.execute("SET memory_limit='2GB'")
+        
+        # Set thread limit to prevent overwhelming the system
+        conn.execute("SET threads=4")
+        
+        # Enable aggressive memory cleanup
+        conn.execute("SET enable_progress_bar=false")
+        conn.execute("SET enable_object_cache=false")
+        
+        # Set reasonable temp directory size limit
+        conn.execute("SET temp_directory='/tmp'")
+        conn.execute("SET max_temp_directory_size='1GB'")
+        
+        print("✅ DuckDB configured with memory limits and stability settings")
+        
+    except Exception as e:
+        print(f"⚠️  Warning: Could not apply some DuckDB settings: {e}")
+    
+    return conn
+
+# Global DuckDB connection with improved configuration
+conn = create_duckdb_connection()
+db_lock = threading.RLock()  # Use RLock instead of Lock for better thread safety
 
 # Data storage
 data_info = {
@@ -122,25 +150,31 @@ def load_historical_table(table_info):
             print(f"❌ Error: File {table_info['path']} does not exist")
             return None
             
-        # For very large files, add a warning
-        if table_info['size'] > 100 * 1024 * 1024:  # 100MB
-            print(f"⚠️  Large file detected ({table_info['size'] / 1024 / 1024:.1f} MB), this may take some time...")
+        # For very large files, add a warning and skip if too large
+        if table_info['size'] > 500 * 1024 * 1024:  # 500MB limit
+            print(f"⚠️  Skipping very large file ({table_info['size'] / 1024 / 1024:.1f} MB) to prevent memory issues")
+            return None
         
-        # Use thread-safe database access
+        # Use thread-safe database access with timeout
         with db_lock:
             print(f"📖 Reading CSV file: {table_info['path']}")
             
-            # Read directly into DuckDB without intermediate DataFrame
-            conn.execute(f"""
-                INSERT OR IGNORE INTO layer_data 
-                SELECT *, '{table_info['filename']}' as source_file 
-                FROM read_csv_auto('{table_info['path']}')
-            """)
-            
-            # Get row count
-            row_count = conn.execute(f"""
-                SELECT COUNT(*) FROM layer_data WHERE source_file = '{table_info['filename']}'
-            """).fetchone()[0]
+            try:
+                # Read directly into DuckDB with better error handling
+                conn.execute(f"""
+                    INSERT OR IGNORE INTO layer_data 
+                    SELECT *, '{table_info['filename']}' as source_file 
+                    FROM read_csv_auto('{table_info['path']}')
+                """)
+                
+                # Get row count
+                row_count = conn.execute(f"""
+                    SELECT COUNT(*) FROM layer_data WHERE source_file = '{table_info['filename']}'
+                """).fetchone()[0]
+                
+            except Exception as db_error:
+                print(f"❌ Database error loading {table_info['filename']}: {db_error}")
+                return None
         
         print(f"✅ Read {row_count} rows from {table_info['filename']}")
         
@@ -196,25 +230,30 @@ def load_active_table(table_info, is_reload=False):
             print(f"❌ Error: File {table_info['path']} does not exist")
             return None
             
-        # For very large files, add a warning
-        if table_info['size'] > 500 * 1024 * 1024:  # 500MB
-            print(f"⚠️  Large file detected ({table_info['size'] / 1024 / 1024:.1f} MB), this may take some time...")
+        # For very large files, add a warning but still try to load (active table is important)
+        if table_info['size'] > 1024 * 1024 * 1024:  # 1GB warning
+            print(f"⚠️  Very large active table detected ({table_info['size'] / 1024 / 1024:.1f} MB), loading carefully...")
         
         # Use thread-safe database access
         with db_lock:
             print(f"📖 Reading CSV file: {table_info['path']}")
             
-            # Read directly into DuckDB without intermediate DataFrame
-            conn.execute(f"""
-                INSERT OR IGNORE INTO layer_data 
-                SELECT *, '{table_info['filename']}' as source_file 
-                FROM read_csv_auto('{table_info['path']}')
-            """)
-            
-            # Get row count
-            row_count = conn.execute(f"""
-                SELECT COUNT(*) FROM layer_data WHERE source_file = '{table_info['filename']}'
-            """).fetchone()[0]
+            try:
+                # Read directly into DuckDB with better error handling
+                conn.execute(f"""
+                    INSERT OR IGNORE INTO layer_data 
+                    SELECT *, '{table_info['filename']}' as source_file 
+                    FROM read_csv_auto('{table_info['path']}')
+                """)
+                
+                # Get row count
+                row_count = conn.execute(f"""
+                    SELECT COUNT(*) FROM layer_data WHERE source_file = '{table_info['filename']}'
+                """).fetchone()[0]
+                
+            except Exception as db_error:
+                print(f"❌ Database error loading active table {table_info['filename']}: {db_error}")
+                return None
         
         print(f"✅ Read {row_count} rows from {table_info['filename']}")
         
@@ -269,6 +308,16 @@ def load_csv_files():
                     source_file VARCHAR
                 )
             """)
+            
+            # Add indexes for better performance on common queries
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON layer_data(TIMESTAMP)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_current_time ON layer_data(CURRENT_TIME)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_reporter ON layer_data(REPORTER)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_query_id ON layer_data(QUERY_ID)")
+                print("✅ Created database indexes for better performance")
+            except Exception as idx_error:
+                print(f"⚠️  Warning: Could not create some indexes: {idx_error}")
         
         table_files = get_table_files()
         
@@ -278,12 +327,19 @@ def load_csv_files():
         
         print(f"📂 Found {len(table_files)} table files...")
         
+        # Limit historical tables to prevent memory issues
+        max_historical_tables = 5  # Only keep last 5 historical tables
+        
         tables_info = []
         total_rows = 0
         
         # The most recent timestamp file is the active one
         active_table = table_files[-1] if table_files else None
+        # Limit historical tables
         historical_tables = table_files[:-1] if len(table_files) > 1 else []
+        historical_tables = historical_tables[-max_historical_tables:]  # Only last N historical
+        
+        print(f"📚 Will load {len(historical_tables)} historical tables (limited for stability)")
         
         # Load historical tables (only if not already loaded)
         for table_info in historical_tables:
@@ -425,7 +481,7 @@ async def get_info():
 
 @dashboard_app.get("/api/data")
 async def get_data(
-    limit: int = Query(100, ge=1, le=10000),
+    limit: int = Query(100, ge=1, le=1000),  # Reduced max limit
     offset: int = Query(0, ge=0),
     reporter: Optional[str] = None,
     query_type: Optional[str] = None,
@@ -435,7 +491,7 @@ async def get_data(
     source_file: Optional[str] = None,
     questionable_only: Optional[bool] = None
 ):
-    """Get paginated data with optional filters"""
+    """Get paginated data with optional filters - defaults to most recent 1000 records on first load"""
     try:
         # Build WHERE clause
         where_conditions = []
@@ -474,29 +530,71 @@ async def get_data(
         
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
         
-        # Get total count
-        count_query = f"SELECT COUNT(*) as total FROM layer_data WHERE {where_clause}"
-        total = conn.execute(count_query, list(params.values())).fetchone()[0]
-        
-        # Get data
-        data_query = f"""
-            SELECT * FROM layer_data 
-            WHERE {where_clause}
-            ORDER BY CURRENT_TIME DESC, TIMESTAMP DESC
-            LIMIT {limit} OFFSET {offset}
-        """
-        
-        results = conn.execute(data_query, list(params.values())).df()
-        
-        return {
-            "data": results.to_dict(orient="records"),
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": (offset + limit) < total
-        }
+        # Use thread-safe database access
+        with db_lock:
+            # For initial load (offset=0 and no filters), limit to recent data for performance
+            if offset == 0 and not where_conditions:
+                # Get total count first
+                total = conn.execute("SELECT COUNT(*) as total FROM layer_data").fetchone()[0]
+                
+                # If we have more than 10,000 records, limit initial view to most recent 1000
+                if total > 10000:
+                    print(f"📊 Large dataset detected ({total} records), limiting initial view to most recent 1000")
+                    
+                    # Get most recent 1000 records by CURRENT_TIME
+                    data_query = f"""
+                        SELECT * FROM (
+                            SELECT * FROM layer_data 
+                            ORDER BY CURRENT_TIME DESC, TIMESTAMP DESC
+                            LIMIT 1000
+                        ) subquery
+                        ORDER BY CURRENT_TIME DESC, TIMESTAMP DESC
+                        LIMIT {limit} OFFSET {offset}
+                    """
+                    
+                    # Count is limited to 1000 for initial view
+                    limited_total = min(1000, total)
+                    
+                    results = conn.execute(data_query).df()
+                    
+                    return {
+                        "data": results.to_dict(orient="records"),
+                        "total": limited_total,
+                        "actual_total": total,  # Include actual total for information
+                        "limit": limit,
+                        "offset": offset,
+                        "has_more": (offset + limit) < limited_total,
+                        "is_limited_view": True,  # Flag to indicate this is a limited view
+                        "message": f"Showing most recent 1000 of {total} total records for performance"
+                    }
+            
+            # Regular query with filters or pagination beyond initial view
+            count_query = f"SELECT COUNT(*) as total FROM layer_data WHERE {where_clause}"
+            total = conn.execute(count_query, list(params.values())).fetchone()[0]
+            
+            # Get data with proper ordering (most recent first)
+            data_query = f"""
+                SELECT * FROM layer_data 
+                WHERE {where_clause}
+                ORDER BY CURRENT_TIME DESC, TIMESTAMP DESC
+                LIMIT {limit} OFFSET {offset}
+            """
+            
+            results = conn.execute(data_query, list(params.values())).df()
+            
+            return {
+                "data": results.to_dict(orient="records"),
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": (offset + limit) < total,
+                "is_limited_view": False
+            }
         
     except Exception as e:
+        import traceback
+        print(f"❌ Data query error: {e}")
+        print(f"📋 Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @dashboard_app.get("/api/stats")

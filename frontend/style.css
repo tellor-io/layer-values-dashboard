@@ -1572,4 +1572,52 @@ body {
     color: #00d4ff;
     font-size: 0.6875rem;
     opacity: 0.8;
+}
+
+/* Limited View Notice */
+.limited-view-notice {
+    background: rgba(0, 212, 255, 0.1);
+    border: 2px solid #00d4ff;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    animation: slideDown 0.3s ease-out;
+}
+
+.notice-content {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    color: #00d4ff;
+    font-size: 0.875rem;
+}
+
+.notice-content i {
+    color: #00d4ff;
+    font-size: 1rem;
+}
+
+.notice-close {
+    background: none;
+    border: none;
+    color: #00d4ff;
+    cursor: pointer;
+    padding: 0.25rem;
+    margin-left: auto;
+    transition: color 0.2s;
+}
+
+.notice-close:hover {
+    color: #ff6b35;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 } 

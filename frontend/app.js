@@ -322,9 +322,23 @@ const loadData = async (page = 1, filters = {}) => {
         // Update table
         renderTable(response.data);
         
+        // Handle limited view response
+        let totalForPagination = response.total;
+        let additionalInfo = '';
+        
+        if (response.is_limited_view) {
+            additionalInfo = ` (Limited view: ${response.message})`;
+            // Show a notice to user about limited view
+            if (page === 1) {
+                console.log(`📊 ${response.message}`);
+                // Optionally show a user-friendly message
+                showLimitedViewNotice(response.actual_total, response.total);
+            }
+        }
+        
         // Update pagination
-        const totalPages = Math.ceil(response.total / RECORDS_PER_PAGE);
-        updatePagination(page, totalPages, response.total, response.offset);
+        const totalPages = Math.ceil(totalForPagination / RECORDS_PER_PAGE);
+        updatePagination(page, totalPages, totalForPagination, response.offset, additionalInfo);
         
         currentPage = page;
         
@@ -334,6 +348,44 @@ const loadData = async (page = 1, filters = {}) => {
     } finally {
         hideLoading();
     }
+};
+
+const showLimitedViewNotice = (actualTotal, limitedTotal) => {
+    // Create a small notice banner
+    const notice = document.createElement('div');
+    notice.className = 'limited-view-notice';
+    notice.innerHTML = `
+        <div class="notice-content">
+            <i class="fas fa-info-circle"></i>
+            <span>Showing most recent ${limitedTotal.toLocaleString()} of ${actualTotal.toLocaleString()} total records for faster loading. Use filters to search all data.</span>
+            <button class="notice-close" onclick="this.parentElement.parentElement.remove()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `;
+    
+    // Insert notice before the data table
+    const dataSection = document.querySelector('.data-section');
+    dataSection.insertBefore(notice, dataSection.firstChild);
+    
+    // Auto-remove after 10 seconds
+    setTimeout(() => {
+        if (notice.parentElement) {
+            notice.remove();
+        }
+    }, 10000);
+};
+
+const updatePagination = (page, totalPages, total, offset, additionalInfo = '') => {
+    elements.currentPageSpan.textContent = page;
+    elements.totalPages.textContent = totalPages;
+    
+    const start = offset + 1;
+    const end = Math.min(offset + RECORDS_PER_PAGE, total);
+    elements.showingInfo.textContent = `Showing ${start}-${end} of ${formatNumber(total)} records${additionalInfo}`;
+    
+    elements.prevPage.disabled = page <= 1;
+    elements.nextPage.disabled = page >= totalPages;
 };
 
 const searchData = async (query) => {
@@ -420,18 +472,6 @@ const renderTable = (data) => {
             </td>
         </tr>
     `).join('');
-};
-
-const updatePagination = (page, totalPages, total, offset) => {
-    elements.currentPageSpan.textContent = page;
-    elements.totalPages.textContent = totalPages;
-    
-    const start = offset + 1;
-    const end = Math.min(offset + RECORDS_PER_PAGE, total);
-    elements.showingInfo.textContent = `Showing ${start}-${end} of ${formatNumber(total)} records`;
-    
-    elements.prevPage.disabled = page <= 1;
-    elements.nextPage.disabled = page >= totalPages;
 };
 
 const showDetails = (row) => {
@@ -678,7 +718,7 @@ const loadQueryAnalytics = async (timeframe) => {
         // Create legend
         createQueryLegend(data);
         
-            } catch (error) {
+    } catch (error) {
         console.error('Failed to load query analytics:', error);
         elements.queryAnalyticsTitle.textContent = 'Failed to load query analytics';
     } finally {
