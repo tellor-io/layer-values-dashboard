@@ -1620,4 +1620,87 @@ body {
         opacity: 1;
         transform: translateY(0);
     }
+}
+
+/* Mobile error handling */
+.mobile-error-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(135deg, #ff6b35, #ff8c42);
+    color: white;
+    z-index: 10000;
+    animation: slideDown 0.3s ease-out;
+    box-shadow: 0 2px 10px rgba(255, 107, 53, 0.3);
+}
+
+.error-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.error-content i {
+    margin-right: 10px;
+    font-size: 16px;
+}
+
+.error-close {
+    background: none;
+    border: none;
+    color: white;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+.error-close:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Mobile indicator */
+.mobile-indicator {
+    background: linear-gradient(135deg, #00ff88, #00d4ff);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-left: 10px;
+}
+
+.mobile-indicator .stat-value {
+    font-weight: 600;
+    color: #1a1a2e;
+}
+
+/* Cellular error styling */
+.cellular-error {
+    background: linear-gradient(135deg, #ff8c42, #ffb347);
+}
+
+.cellular-indicator {
+    background: linear-gradient(135deg, #ff8c42, #ffb347);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-left: 10px;
+}
+
+.cellular-indicator .stat-value {
+    font-weight: 600;
+    color: #1a1a2e;
+}
+
+/* Cellular device optimizations */
+@media (max-width: 768px) {
+    .cellular-device .chart-container {
+        height: 200px; /* Even shorter for cellular */
+    }
+    
+    .cellular-device .stats-grid {
+        grid-template-columns: 1fr 1fr; /* Force 2 columns max */
+        gap: 8px;
+    }
 } 

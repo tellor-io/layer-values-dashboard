@@ -5,7 +5,33 @@ let isLoading = false;
 let totalRecords = 0;
 let pageLoadTime = new Date(); // Store page load time
 
-// Configuration
+// Enhanced cellular detection
+const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+const IS_CELLULAR = checkCellularConnection();
+
+function checkCellularConnection() {
+    // Check for cellular indicators
+    if (navigator.connection) {
+        const connectionType = navigator.connection.effectiveType;
+        return ['slow-2g', '2g', '3g', '4g'].includes(connectionType) || 
+               navigator.connection.type === 'cellular';
+    }
+    
+    // Fallback: check user agent for carrier indicators
+    const userAgent = navigator.userAgent.toLowerCase();
+    return userAgent.includes('mobile') && (
+        userAgent.includes('verizon') || 
+        userAgent.includes('att') || 
+        userAgent.includes('t-mobile') ||
+        userAgent.includes('sprint')
+    );
+}
+
+// Cellular-optimized configuration
+const REQUEST_TIMEOUT = IS_CELLULAR ? 8000 : (IS_MOBILE ? 15000 : 30000);
+const MAX_RETRIES = IS_CELLULAR ? 1 : (IS_MOBILE ? 2 : 3);
+
+// Configuration with mobile detection
 const RECORDS_PER_PAGE = 100;
 const API_BASE = '/dashboard';
 
@@ -189,8 +215,11 @@ const updateLoadTime = () => {
     elements.loadTimestamp.textContent = timeString;
 };
 
-// API functions
-const apiCall = async (endpoint, params = {}) => {
+// Enhanced API call with cellular optimizations
+const apiCall = async (endpoint, params = {}, retries = MAX_RETRIES) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    
     try {
         const url = new URL(`${API_BASE}/api${endpoint}`, window.location.origin);
         Object.keys(params).forEach(key => {
@@ -199,15 +228,83 @@ const apiCall = async (endpoint, params = {}) => {
             }
         });
         
-        const response = await fetch(url);
+        console.log(`📡 ${IS_CELLULAR ? 'CELLULAR' : (IS_MOBILE ? 'MOBILE' : 'DESKTOP')} API Call: ${endpoint}`);
+        
+        const headers = {
+            'X-Mobile-Request': IS_MOBILE ? 'true' : 'false',
+            'Cache-Control': IS_CELLULAR ? 'max-age=60' : (IS_MOBILE ? 'max-age=120' : 'max-age=300')
+        };
+        
+        // Add cellular connection indicator
+        if (IS_CELLULAR) {
+            headers['Connection-Type'] = 'cellular';
+        }
+        
+        const response = await fetch(url, {
+            signal: controller.signal,
+            headers: headers
+        });
+        
+        clearTimeout(timeoutId);
+        
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-        return await response.json();
+        
+        const data = await response.json();
+        console.log(`✅ API Response: ${endpoint} - Cellular: ${IS_CELLULAR}`);
+        return data;
+        
     } catch (error) {
-        console.error('API call failed:', error);
+        clearTimeout(timeoutId);
+        
+        console.error(`❌ API call failed: ${endpoint}`, {
+            error: error.message,
+            cellular: IS_CELLULAR,
+            mobile: IS_MOBILE,
+            retries: retries
+        });
+        
+        // More conservative retry for cellular
+        if (retries > 0 && error.name !== 'AbortError') {
+            const retryDelay = IS_CELLULAR ? 2000 : 1000;
+            console.log(`🔄 Retrying API call: ${endpoint} (${retries} retries left)`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+            return apiCall(endpoint, params, retries - 1);
+        }
+        
+        if (IS_CELLULAR) {
+            showCellularErrorMessage(error);
+        } else if (IS_MOBILE) {
+            showMobileErrorMessage(error);
+        }
+        
         throw error;
     }
+};
+
+// Cellular-specific error handling
+const showCellularErrorMessage = (error) => {
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'mobile-error-banner cellular-error';
+    errorDiv.innerHTML = `
+        <div class="error-content">
+            <i class="fas fa-signal"></i>
+            <span>Cellular network issue detected. Try switching to WiFi or refreshing in a moment.</span>
+            <button onclick="this.parentElement.parentElement.remove()" class="error-close">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `;
+    
+    document.body.insertBefore(errorDiv, document.body.firstChild);
+    
+    // Longer display time for cellular issues
+    setTimeout(() => {
+        if (errorDiv.parentElement) {
+            errorDiv.remove();
+        }
+    }, 8000);
 };
 
 const loadStats = async () => {
@@ -307,44 +404,42 @@ const loadStats = async () => {
     }
 };
 
+// Enhanced loading with mobile optimization
 const loadData = async (page = 1, filters = {}) => {
     showLoading();
     
     try {
+        // Mobile optimization: smaller page size
+        const pageSize = IS_MOBILE ? 50 : RECORDS_PER_PAGE;
+        
         const params = {
-            limit: RECORDS_PER_PAGE,
-            offset: (page - 1) * RECORDS_PER_PAGE,
+            limit: pageSize,
+            offset: (page - 1) * pageSize,
             ...filters
         };
+        
+        console.log(`📊 Loading data - Page: ${page}, Mobile: ${IS_MOBILE}, PageSize: ${pageSize}`);
         
         const response = await apiCall('/data', params);
         
         // Update table
         renderTable(response.data);
         
-        // Handle limited view response
-        let totalForPagination = response.total;
-        let additionalInfo = '';
-        
-        if (response.is_limited_view) {
-            additionalInfo = ` (Limited view: ${response.message})`;
-            // Show a notice to user about limited view
-            if (page === 1) {
-                console.log(`📊 ${response.message}`);
-                // Optionally show a user-friendly message
-                showLimitedViewNotice(response.actual_total, response.total);
-            }
-        }
-        
-        // Update pagination
-        const totalPages = Math.ceil(totalForPagination / RECORDS_PER_PAGE);
-        updatePagination(page, totalPages, totalForPagination, response.offset, additionalInfo);
+        // Handle pagination with mobile page size
+        const totalPages = Math.ceil(response.total / pageSize);
+        updatePagination(page, totalPages, response.total, response.offset);
         
         currentPage = page;
         
     } catch (error) {
         console.error('Failed to load data:', error);
-        elements.dataTbody.innerHTML = '<tr><td colspan="9" class="text-center text-red">Failed to load data</td></tr>';
+        elements.dataTbody.innerHTML = `
+            <tr>
+                <td colspan="9" class="text-center text-red">
+                    ${IS_MOBILE ? 'Connection error. Please check your network.' : 'Failed to load data'}
+                </td>
+            </tr>
+        `;
     } finally {
         hideLoading();
     }
@@ -570,9 +665,9 @@ const hideAnalyticsModal = () => {
     }
 };
 
+// Mobile-optimized analytics loading
 const loadAnalytics = async (timeframe) => {
     try {
-        // Show loading
         elements.analyticsLoading.style.display = 'flex';
         
         // Update active button
@@ -583,20 +678,26 @@ const loadAnalytics = async (timeframe) => {
             }
         });
         
-        // Fetch analytics data
+        console.log(`📊 Loading analytics - Timeframe: ${timeframe}, Mobile: ${IS_MOBILE}`);
+        
+        // Fetch analytics data with mobile optimization
         const data = await apiCall('/analytics', { timeframe });
         
         // Update title
         elements.analyticsTitle.textContent = data.title;
+        if (data.mobile_optimized) {
+            elements.analyticsTitle.textContent += ' (Mobile Optimized)';
+        }
         
-        // Create or update chart
+        // Create chart
         createAnalyticsChart(data);
         
     } catch (error) {
         console.error('Failed to load analytics:', error);
-        elements.analyticsTitle.textContent = 'Failed to load analytics';
+        elements.analyticsTitle.textContent = IS_MOBILE ? 
+            'Unable to load analytics. Please try again.' : 
+            'Failed to load analytics';
     } finally {
-        // Hide loading
         elements.analyticsLoading.style.display = 'none';
     }
 };
@@ -1833,6 +1934,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
     });
+
+    // Add cellular indicator
+    if (IS_CELLULAR) {
+        document.body.classList.add('cellular-device');
+        console.log('📡 Cellular connection detected - aggressive optimizations enabled');
+        
+        const headerStats = document.querySelector('.header-stats');
+        if (headerStats) {
+            const cellularIndicator = document.createElement('div');
+            cellularIndicator.className = 'stat-item cellular-indicator';
+            cellularIndicator.innerHTML = `
+                <span class="stat-label">Connection</span>
+                <span class="stat-value">📡 Cellular Optimized</span>
+            `;
+            headerStats.appendChild(cellularIndicator);
+        }
+    }
 });
 
 // Make showDetails available globally

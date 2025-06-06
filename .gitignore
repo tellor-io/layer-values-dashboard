@@ -243,10 +243,10 @@ logs/
 .tmp/
 
 # Lock files (uncomment if you want to ignore them)
-# uv.lock
+uv.lock
 
 # Environment files
 .env.local
 .env.development
 .env.test
-.env.production 
+.env.production
