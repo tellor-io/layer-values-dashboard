@@ -55,22 +55,34 @@
             <!-- Stats Dashboard -->
             <div class="stats-dashboard">
                 <div class="stats-grid">
-                    <div class="stat-card">
+                    <div class="stat-card clickable" id="unique-reporters-card">
                         <div class="stat-icon">
                             <i class="fas fa-users"></i>
                         </div>
                         <div class="stat-content">
                             <div class="stat-number" id="unique-reporters">-</div>
                             <div class="stat-title">Unique Reporters</div>
+                            <div class="stat-subtitle">Click to view analytics</div>
                         </div>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card clickable" id="query-ids-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-tags"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="unique-query-ids-30d">-</div>
+                            <div class="stat-title">Query IDs (30 days)</div>
+                            <div class="stat-subtitle">Click to view analytics</div>
+                        </div>
+                    </div>
+                    <div class="stat-card clickable" id="total-reporter-power-card">
                         <div class="stat-icon">
                             <i class="fas fa-chart-line"></i>
                         </div>
                         <div class="stat-content">
                             <div class="stat-number" id="total-reporter-power">-</div>
                             <div class="stat-title">Current Reporter Power</div>
+                            <div class="stat-subtitle">Click to view distribution</div>
                         </div>
                     </div>
                     <div class="stat-card clickable" id="recent-activity-card">
@@ -80,6 +92,7 @@
                         <div class="stat-content">
                             <div class="stat-number" id="recent-activity">-</div>
                             <div class="stat-title">Reports in last hour</div>
+                            <div class="stat-subtitle">Click for more report frequency data</div>
                         </div>
                     </div>
                     <div class="stat-card clickable" id="questionable-card">
@@ -95,6 +108,16 @@
                             <i class="fas fa-bolt"></i>
                         </div>
                     </div>
+                    <div class="stat-card clickable" id="agreement-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-balance-scale"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="average-agreement">-</div>
+                            <div class="stat-title">Average Agreement</div>
+                            <div class="stat-subtitle">Click to view analytics</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -108,7 +131,7 @@
                         </h2>
                         <div class="header-stats">
                             <div class="stat-item">
-                                <span class="stat-label">Total Records</span>
+                                <span class="stat-label">Total Records Loaded</span>
                                 <span class="stat-value" id="total-records">-</span>
                             </div>
                             <div class="stat-item">
@@ -136,7 +159,9 @@
                             <tr>
                                 <th>Details</th>
                                 <th>Query ID</th>
-                                <th>Value</th>
+                                <th>Reported Value</th>
+                                <th>Trusted Value</th>
+                                <th>Agreement</th>
                                 <th>Reporter</th>
                                 <th>Power</th>
                                 <th>Time Ago</th>
@@ -195,14 +220,14 @@
                 </div>
                 <div class="modal-body analytics-modal-body">
                     <div class="analytics-controls">
-                        <button class="analytics-btn active" data-timeframe="hourly">
-                            <i class="fas fa-clock"></i> RP30M-Past-Day
+                        <button class="analytics-btn active" data-timeframe="24h">
+                            <i class="fas fa-clock"></i> 24h
                         </button>
-                        <button class="analytics-btn" data-timeframe="daily">
-                            <i class="fas fa-calendar-day"></i> RPD-Past-Month
+                        <button class="analytics-btn" data-timeframe="7d">
+                            <i class="fas fa-calendar-week"></i> 7d
                         </button>
-                        <button class="analytics-btn" data-timeframe="weekly">
-                            <i class="fas fa-calendar-week"></i> RPH-Past-Week
+                        <button class="analytics-btn" data-timeframe="30d">
+                            <i class="fas fa-calendar"></i> 30d
                         </button>
                     </div>
                     <div class="chart-container">
@@ -211,6 +236,157 @@
                     <div class="analytics-loading" id="analytics-loading" style="display: none;">
                         <div class="spinner"></div>
                         <div class="loading-text">Loading analytics...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Query Analytics Modal -->
+        <div class="modal" id="query-analytics-modal">
+            <div class="modal-content analytics-modal-content">
+                <div class="modal-header">
+                    <h3 id="query-analytics-title">Reports by Query ID</h3>
+                    <button class="modal-close" id="query-analytics-modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body analytics-modal-body">
+                    <div class="analytics-controls">
+                        <button class="analytics-btn active" data-timeframe="24h">
+                            <i class="fas fa-clock"></i> 24h
+                        </button>
+                        <button class="analytics-btn" data-timeframe="7d">
+                            <i class="fas fa-calendar-week"></i> 7d
+                        </button>
+                        <button class="analytics-btn" data-timeframe="30d">
+                            <i class="fas fa-calendar"></i> 30d
+                        </button>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="query-analytics-chart"></canvas>
+                    </div>
+                    <div class="query-legend" id="query-legend">
+                        <!-- Legend will be populated here -->
+                    </div>
+                    <div class="analytics-loading" id="query-analytics-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Loading query analytics...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reporter Analytics Modal -->
+        <div class="modal" id="reporter-analytics-modal">
+            <div class="modal-content analytics-modal-content">
+                <div class="modal-header">
+                    <h3 id="reporter-analytics-title">Reports by Reporter</h3>
+                    <button class="modal-close" id="reporter-analytics-modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body analytics-modal-body">
+                    <div class="analytics-controls">
+                        <button class="analytics-btn active" data-timeframe="24h">
+                            <i class="fas fa-clock"></i> 24h
+                        </button>
+                        <button class="analytics-btn" data-timeframe="7d">
+                            <i class="fas fa-calendar-week"></i> 7d
+                        </button>
+                        <button class="analytics-btn" data-timeframe="30d">
+                            <i class="fas fa-calendar"></i> 30d
+                        </button>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="reporter-analytics-chart"></canvas>
+                    </div>
+                    <div class="reporter-legend" id="reporter-legend">
+                        <!-- Legend will be populated here -->
+                    </div>
+                    <div class="analytics-loading" id="reporter-analytics-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Loading reporter analytics...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reporter Power Analytics Modal -->
+        <div class="modal" id="power-analytics-modal">
+            <div class="modal-content analytics-modal-content">
+                <div class="modal-header">
+                    <h3 id="power-analytics-title">Reporter Power Distribution</h3>
+                    <button class="modal-close" id="power-analytics-modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body analytics-modal-body">
+                    <div class="power-controls">
+                        <div class="query-selector">
+                            <label for="query-id-select">Filter by Query ID:</label>
+                            <select id="query-id-select">
+                                <option value="">Overall (All Query IDs)</option>
+                            </select>
+                        </div>
+                        <div class="power-info" id="power-info">
+                            <!-- Power analytics info will be populated here -->
+                        </div>
+                    </div>
+                    <div class="power-analytics-container">
+                        <div class="chart-section">
+                            <div class="chart-container pie-chart-container">
+                                <canvas id="power-analytics-chart"></canvas>
+                            </div>
+                            <div class="power-legend" id="power-legend">
+                                <!-- Legend will be populated here -->
+                            </div>
+                        </div>
+                        <div class="absent-reporters-section" id="absent-reporters-section">
+                            <h4>Absent Reporters</h4>
+                            <p class="section-subtitle">Reporters who reported in the past hour but missed the latest round</p>
+                            <div id="absent-reporters-list">
+                                <!-- Absent reporters will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                    <div class="analytics-loading" id="power-analytics-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Loading power analytics...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agreement Analytics Modal -->
+        <div class="modal" id="agreement-analytics-modal">
+            <div class="modal-content analytics-modal-content">
+                <div class="modal-header">
+                    <h3 id="agreement-analytics-title">Agreement Analytics</h3>
+                    <button class="modal-close" id="agreement-analytics-modal-close">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body analytics-modal-body">
+                    <div class="analytics-controls">
+                        <button class="analytics-btn active" data-timeframe="24h">
+                            <i class="fas fa-clock"></i> 24h
+                        </button>
+                        <button class="analytics-btn" data-timeframe="7d">
+                            <i class="fas fa-calendar-week"></i> 7d
+                        </button>
+                        <button class="analytics-btn" data-timeframe="30d">
+                            <i class="fas fa-calendar"></i> 30d
+                        </button>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="agreement-analytics-chart"></canvas>
+                    </div>
+                    <div class="agreement-legend" id="agreement-legend">
+                        <!-- Legend will be populated here -->
+                    </div>
+                    <div class="analytics-loading" id="agreement-analytics-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Loading agreement analytics...</div>
                     </div>
                 </div>
             </div>
