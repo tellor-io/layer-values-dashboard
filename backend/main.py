@@ -984,36 +984,36 @@ async def get_analytics(
         # Aggressive optimization for cellular
         if is_cellular:
             if timeframe == "24h":
-                interval_ms = 4 * 60 * 60 * 1000  # 4 hours instead of 1-2
-                num_buckets = 6
-            elif timeframe == "7d":
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
-            elif timeframe == "30d":
-                interval_ms = 10 * 24 * 60 * 60 * 1000  # 10 days instead of 3-5
-                num_buckets = 3
-        elif is_mobile:
-            # Standard mobile optimization
-            if timeframe == "24h":
-                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
+                interval_ms = 2 * 60 * 60 * 1000  # 2 hours instead of 4
                 num_buckets = 12
             elif timeframe == "7d":
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 12 * 60 * 60 * 1000  # 12 hours
+                num_buckets = 14
             elif timeframe == "30d":
-                interval_ms = 5 * 24 * 60 * 60 * 1000  # 5 days
+                interval_ms = 5 * 24 * 60 * 60 * 1000  # 5 days instead of 10
                 num_buckets = 6
-        else:
-            # Desktop gets full resolution
+        elif is_mobile:
+            # Standard mobile optimization
             if timeframe == "24h":
                 interval_ms = 1 * 60 * 60 * 1000  # 1 hour
                 num_buckets = 24
             elif timeframe == "7d":
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 12 * 60 * 60 * 1000  # 12 hours
+                num_buckets = 14
             elif timeframe == "30d":
-                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
-                num_buckets = 10
+                interval_ms = 2 * 24 * 60 * 60 * 1000  # 2 days
+                num_buckets = 15
+        else:
+            # Desktop gets higher resolution
+            if timeframe == "24h":
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
+            elif timeframe == "7d":
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
+            elif timeframe == "30d":
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
         
         current_time_ms = int(time.time() * 1000)
         start_time = current_time_ms - (num_buckets * interval_ms)
@@ -1132,26 +1132,26 @@ async def get_query_analytics(
         with db_lock:
             if timeframe == "24h":
                 logger.info("🕒 Processing 24h query analytics...")
-                # 2-hour intervals over past 24 hours
+                # 30-minute intervals over past 24 hours
                 hours_24_ms = 24 * 60 * 60 * 1000
-                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
-                num_buckets = 12
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
                 
             elif timeframe == "7d":
                 logger.info("📅 Processing 7d query analytics...")
-                # Daily intervals over past 7 days
+                # 6-hour intervals over past 7 days
                 days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
                 start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d query analytics...")
-                # 3-day intervals over past 30 days
+                # Daily intervals over past 30 days
                 days_30_ms = 30 * 24 * 60 * 60 * 1000
-                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
-                num_buckets = 10
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
                 start_time = current_time_ms - days_30_ms
             
             logger.info(f"📈 Querying query ID data from {start_time} to {current_time_ms}")
@@ -1277,26 +1277,26 @@ async def get_reporter_analytics(
         with db_lock:
             if timeframe == "24h":
                 logger.info("🕒 Processing 24h reporter analytics...")
-                # 2-hour intervals over past 24 hours
+                # 30-minute intervals over past 24 hours
                 hours_24_ms = 24 * 60 * 60 * 1000
-                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
-                num_buckets = 12
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
                 
             elif timeframe == "7d":
                 logger.info("📅 Processing 7d reporter analytics...")
-                # Daily intervals over past 7 days
+                # 6-hour intervals over past 7 days
                 days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
                 start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d reporter analytics...")
-                # 3-day intervals over past 30 days
+                # Daily intervals over past 30 days
                 days_30_ms = 30 * 24 * 60 * 60 * 1000
-                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
-                num_buckets = 10
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
                 start_time = current_time_ms - days_30_ms
             
             logger.info(f"📈 Querying reporter data from {start_time} to {current_time_ms}")
@@ -1683,26 +1683,26 @@ async def get_agreement_analytics(
         with db_lock:
             if timeframe == "24h":
                 logger.info("🕒 Processing 24h agreement analytics...")
-                # 2-hour intervals over past 24 hours
+                # 30-minute intervals over past 24 hours
                 hours_24_ms = 24 * 60 * 60 * 1000
-                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
-                num_buckets = 12
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
                 
             elif timeframe == "7d":
                 logger.info("📅 Processing 7d agreement analytics...")
-                # Daily intervals over past 7 days
+                # 6-hour intervals over past 7 days
                 days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
                 start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d agreement analytics...")
-                # 3-day intervals over past 30 days
+                # Daily intervals over past 30 days
                 days_30_ms = 30 * 24 * 60 * 60 * 1000
-                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
-                num_buckets = 10
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
                 start_time = current_time_ms - days_30_ms
             
             logger.info(f"📈 Querying agreement data from {start_time} to {current_time_ms}")
