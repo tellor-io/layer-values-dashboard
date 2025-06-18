@@ -569,6 +569,8 @@ def load_csv_files():
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_current_time ON layer_data(CURRENT_TIME)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_reporter ON layer_data(REPORTER)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_query_id ON layer_data(QUERY_ID)")
+                # Composite index for analytics queries (timestamp + reporter for efficient grouping)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp_reporter ON layer_data(TIMESTAMP, REPORTER)")
                 logger.info("✅ Created database indexes for better performance")
             except Exception as idx_error:
                 logger.warning(f"⚠️  Warning: Could not create some indexes: {idx_error}")
@@ -2297,6 +2299,125 @@ async def get_reporter_detail(address: str):
     except Exception as e:
         logger.error(f"❌ Error getting reporter detail: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get reporter detail: {str(e)}")
+
+@dashboard_app.get("/api/reporters-activity-analytics")
+async def get_reporters_activity_analytics(
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$"),
+    request: Request = None
+):
+    """Get total reports by active reporters analytics data for different timeframes"""
+    try:
+        # Add cache headers for performance
+        if request:
+            # Cache for 60 seconds for this analytics data
+            cache_seconds = 60
+            optimization_note = ""
+        
+        # Add memory monitoring for performance tracking
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+        logger.info(f"📊 Reporter activity analytics request: timeframe={timeframe}")
+        current_time_ms = int(time.time() * 1000)
+        
+        # Use thread-safe database access
+        with db_lock:
+            if timeframe == "24h":
+                logger.info("🕒 Processing 24h reporter activity analytics...")
+                # 30-minute intervals over past 24 hours
+                hours_24_ms = 24 * 60 * 60 * 1000
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
+                start_time = current_time_ms - hours_24_ms
+                
+            elif timeframe == "7d":
+                logger.info("📅 Processing 7d reporter activity analytics...")
+                # 6-hour intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
+                start_time = current_time_ms - days_7_ms
+                
+            elif timeframe == "30d":
+                logger.info("📊 Processing 30d reporter activity analytics...")
+                # Daily intervals over past 30 days
+                days_30_ms = 30 * 24 * 60 * 60 * 1000
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
+                start_time = current_time_ms - days_30_ms
+            
+            logger.info(f"📈 Querying reporter activity data from {start_time} to {current_time_ms}")
+            
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Get bucketed data for total reports by active reporters using more efficient approach
+            results = conn.execute(f"""
+                WITH RECURSIVE bucket_series AS (
+                    SELECT 0 as bucket_id
+                    UNION ALL
+                    SELECT bucket_id + 1 FROM bucket_series WHERE bucket_id < ? - 1
+                ),
+                                 time_buckets AS (
+                     SELECT 
+                         FLOOR((TIMESTAMP - ?) / ?) as bucket_id,
+                         COUNT(DISTINCT REPORTER) as active_reporters,
+                         COUNT(*) as total_reports
+                     FROM layer_data 
+                     WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
+                     GROUP BY bucket_id
+                 )
+                SELECT 
+                    bs.bucket_id,
+                    COALESCE(tb.active_reporters, 0) as active_reporters,
+                    COALESCE(tb.total_reports, 0) as total_reports
+                FROM bucket_series bs
+                LEFT JOIN time_buckets tb ON bs.bucket_id = tb.bucket_id
+                ORDER BY bs.bucket_id
+            """, [num_buckets, start_time, interval_ms, start_time, current_time_ms] + safe_params).fetchall()
+            
+            # Create arrays efficiently using list comprehension
+            total_reports_data = [row[2] for row in results]
+            active_reporters_data = [row[1] for row in results]
+            
+            # Generate time labels efficiently
+            time_labels = []
+            for i in range(num_buckets):
+                bucket_start = start_time + (i * interval_ms)
+                dt = pd.to_datetime(bucket_start, unit='ms')
+                if timeframe == "24h":
+                    time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d'))
+                elif timeframe == "30d":
+                    time_labels.append(dt.strftime('%m/%d'))
+            
+            # Log final memory usage
+            final_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.info(f"📊 Memory usage: {initial_memory:.1f} MB → {final_memory:.1f} MB (Δ{final_memory-initial_memory:+.1f} MB)")
+            
+            response_data = {
+                "timeframe": timeframe,
+                "title": f"Reporter Activity (Past {timeframe})",
+                "time_labels": time_labels,
+                "total_reports": total_reports_data,
+                "active_reporters": active_reporters_data
+            }
+            
+            # Return with cache headers
+            response = JSONResponse(content=response_data)
+            if request:
+                response.headers["Cache-Control"] = f"public, max-age={cache_seconds}"
+                response.headers["X-Optimization"] = "Efficient SQL with bucket series"
+            
+            return response
+            
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"❌ Reporter activity analytics error: {str(e)}")
+        logger.error(f"📋 Full traceback:\n{error_details}")
+        
+        raise HTTPException(status_code=500, detail=f"Reporter activity analytics processing failed: {str(e)}")
 
 @dashboard_app.get("/api/reporters-summary")
 async def get_reporters_summary():

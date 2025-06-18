@@ -7,12 +7,40 @@
     <link rel="stylesheet" href="./static/style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
 </head>
 <body>
     <div class="app">
         <!-- Main Content -->
         <main class="main">
 
+            <!-- Reporter Activity Chart -->
+            <div class="analytics-section">
+                <div class="analytics-header">
+                    <h2>
+                        <i class="fas fa-chart-line"></i>
+                        Reporter Activity Over Time
+                    </h2>
+                    <div class="analytics-controls">
+                        <button class="analytics-btn active" data-timeframe="24h">
+                            <i class="fas fa-clock"></i> 24h
+                        </button>
+                        <button class="analytics-btn" data-timeframe="7d">
+                            <i class="fas fa-calendar-week"></i> 7d
+                        </button>
+                        <button class="analytics-btn" data-timeframe="30d">
+                            <i class="fas fa-calendar"></i> 30d
+                        </button>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="reporter-activity-chart"></canvas>
+                </div>
+                <div class="analytics-loading" id="reporter-activity-loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <div class="loading-text">Loading reporter activity...</div>
+                </div>
+            </div>
 
             <!-- Stats Dashboard -->
             <div class="stats-dashboard">
@@ -132,6 +160,9 @@
                 this.totalReporters = 0;
                 this.maxPower = 0;
                 this.searchTimeout = null;
+                this.reporterActivityChart = null;
+                this.currentTimeframe = '24h';
+                this.isLoadingAnalytics = false;
                 
                 this.initializeEventListeners();
                 this.loadInitialData();
@@ -140,6 +171,7 @@
             async loadInitialData() {
                 this.showLoadingOverlay();
                 try {
+                    await this.loadReporterActivityAnalytics(this.currentTimeframe);
                     await this.loadSummary();
                     await this.loadReporters();
                 } finally {
@@ -152,9 +184,27 @@
                 const prevBtn = document.getElementById('prev-page');
                 const nextBtn = document.getElementById('next-page');
                 
+                // Timeframe button listeners
+                const timeframeButtons = document.querySelectorAll('.analytics-btn');
+                timeframeButtons.forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const timeframe = btn.dataset.timeframe;
+                        if (timeframe !== this.currentTimeframe && !this.isLoadingAnalytics) {
+                            // Update active button
+                            timeframeButtons.forEach(b => b.classList.remove('active'));
+                            btn.classList.add('active');
+                            
+                            // Update current timeframe and reload chart
+                            this.currentTimeframe = timeframe;
+                            await this.loadReporterActivityAnalytics(timeframe);
+                        }
+                    });
+                });
+                
                 refreshBtn.addEventListener('click', async () => {
                     this.showLoadingOverlay();
                     try {
+                        await this.loadReporterActivityAnalytics(this.currentTimeframe);
                         await this.loadSummary();
                         await this.loadReporters();
                     } finally {
@@ -338,6 +388,195 @@
                 alert(`Reporter details for: ${address}\n\nThis could open a detailed view in a future update.`);
             }
             
+            async loadReporterActivityAnalytics(timeframe) {
+                // Prevent simultaneous requests
+                if (this.isLoadingAnalytics) {
+                    return;
+                }
+                
+                try {
+                    this.isLoadingAnalytics = true;
+                    
+                    // Show loading
+                    const loadingEl = document.getElementById('reporter-activity-loading');
+                    loadingEl.style.display = 'flex';
+                    
+                    // Fetch analytics data
+                    const response = await fetch(`/dashboard/api/reporters-activity-analytics?timeframe=${timeframe}`, {
+                        headers: {
+                            'Cache-Control': 'no-cache',
+                            'Pragma': 'no-cache'
+                        }
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    // Create or update chart
+                    this.createReporterActivityChart(data);
+                    
+                } catch (error) {
+                    console.error('Failed to load reporter activity analytics:', error);
+                    
+                    // Show error on chart
+                    const ctx = document.getElementById('reporter-activity-chart').getContext('2d');
+                    if (this.reporterActivityChart) {
+                        this.reporterActivityChart.destroy();
+                    }
+                    ctx.fillStyle = '#ff6b6b';
+                    ctx.font = '16px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Failed to load reporter activity data', ctx.canvas.width / 2, ctx.canvas.height / 2);
+                } finally {
+                    // Hide loading and reset flag
+                    document.getElementById('reporter-activity-loading').style.display = 'none';
+                    this.isLoadingAnalytics = false;
+                }
+            }
+            
+            createReporterActivityChart(data) {
+                const ctx = document.getElementById('reporter-activity-chart').getContext('2d');
+                
+                if (!data.total_reports || data.total_reports.length === 0) {
+                    // Destroy existing chart first
+                    if (this.reporterActivityChart) {
+                        this.reporterActivityChart.destroy();
+                        this.reporterActivityChart = null;
+                    }
+                    // Show "No data" message
+                    ctx.fillStyle = '#00d4ff';
+                    ctx.font = '16px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('No data available for this timeframe', ctx.canvas.width / 2, ctx.canvas.height / 2);
+                    return;
+                }
+                
+                // Update existing chart data if possible, otherwise recreate
+                if (this.reporterActivityChart && data.time_labels.length === this.reporterActivityChart.data.labels.length) {
+                    // Update data efficiently without recreating chart
+                    this.reporterActivityChart.data.labels = data.time_labels;
+                    this.reporterActivityChart.data.datasets[0].data = data.total_reports;
+                    this.reporterActivityChart.data.datasets[1].data = data.active_reporters;
+                    this.reporterActivityChart.update('none'); // No animation for faster updates
+                    return;
+                }
+                
+                // Destroy and recreate chart only when necessary
+                if (this.reporterActivityChart) {
+                    this.reporterActivityChart.destroy();
+                    this.reporterActivityChart = null;
+                }
+                
+                this.reporterActivityChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.time_labels,
+                        datasets: [
+                            {
+                                label: 'Total Reports',
+                                data: data.total_reports,
+                                borderColor: '#00ff88',
+                                backgroundColor: 'rgba(0, 255, 136, 0.1)',
+                                borderWidth: 3,
+                                fill: true,
+                                tension: 0.1,
+                                pointBackgroundColor: '#00ff88',
+                                pointBorderColor: '#000',
+                                pointBorderWidth: 1,
+                                pointRadius: 4,
+                                pointHoverRadius: 6
+                            },
+                            {
+                                label: 'Active Reporters',
+                                data: data.active_reporters,
+                                borderColor: '#00d4ff',
+                                backgroundColor: 'rgba(0, 212, 255, 0.1)',
+                                borderWidth: 3,
+                                fill: false,
+                                tension: 0.1,
+                                pointBackgroundColor: '#00d4ff',
+                                pointBorderColor: '#000',
+                                pointBorderWidth: 1,
+                                pointRadius: 4,
+                                pointHoverRadius: 6
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: {
+                                    color: '#00d4ff',
+                                    usePointStyle: true,
+                                    font: {
+                                        family: 'Inter',
+                                        size: 12
+                                    }
+                                }
+                            },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                                titleColor: '#00d4ff',
+                                bodyColor: '#ffffff',
+                                borderColor: '#00d4ff',
+                                borderWidth: 1,
+                                callbacks: {
+                                    title: function(context) {
+                                        return `Time: ${context[0].label}`;
+                                    },
+                                    label: function(context) {
+                                        const dataset = context.dataset;
+                                        return `${dataset.label}: ${context.formattedValue}`;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: {
+                                    color: '#00d4ff',
+                                    maxTicksLimit: 8,
+                                    font: {
+                                        family: 'Inter',
+                                        size: 11
+                                    }
+                                },
+                                grid: {
+                                    color: 'rgba(51, 51, 68, 0.3)'
+                                }
+                            },
+                            y: {
+                                ticks: {
+                                    color: '#00d4ff',
+                                    beginAtZero: true,
+                                    font: {
+                                        family: 'Inter',
+                                        size: 11
+                                    }
+                                },
+                                grid: {
+                                    color: 'rgba(51, 51, 68, 0.3)'
+                                }
+                            }
+                        },
+                        interaction: {
+                            mode: 'nearest',
+                            axis: 'x',
+                            intersect: false
+                        }
+                    }
+                });
+            }
+            
             escapeHtml(text) {
                 const div = document.createElement('div');
                 div.textContent = text;
@@ -351,6 +590,7 @@
         // Auto-refresh every 5 minutes
         setInterval(async () => {
             try {
+                await app.loadReporterActivityAnalytics(app.currentTimeframe);
                 await app.loadSummary();
                 await app.loadReporters();
             } catch (error) {
