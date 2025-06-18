@@ -22,16 +22,18 @@ sys.path.append(str(Path(__file__).parent.parent / "backend"))
 logger = logging.getLogger(__name__)
 
 class ReporterFetcher:
-    def __init__(self, binary_path: str = "./layerd", update_interval: int = 60):
+    def __init__(self, binary_path: str = "./layerd", update_interval: int = 60, rpc_url: str = None):
         """
         Initialize the reporter fetcher.
         
         Args:
             binary_path: Path to the layerd binary
             update_interval: How often to fetch data (in seconds)
+            rpc_url: RPC URL for layerd commands (optional)
         """
         self.binary_path = Path(binary_path)
         self.update_interval = update_interval
+        self.rpc_url = rpc_url
         self.is_running = False
         self.last_fetch_time = None
         self.fetch_thread = None
@@ -41,6 +43,8 @@ class ReporterFetcher:
             raise FileNotFoundError(f"Binary not found at {self.binary_path}")
         
         logger.info(f"🔗 ReporterFetcher initialized with binary: {self.binary_path}")
+        if self.rpc_url:
+            logger.info(f"🌐 Using RPC URL: {self.rpc_url}")
         logger.info(f"⏰ Update interval: {self.update_interval} seconds")
 
     def fetch_reporters_data(self) -> Optional[Dict[str, Any]]:
@@ -55,6 +59,11 @@ class ReporterFetcher:
             
             # Execute the RPC query
             cmd = [str(self.binary_path), "query", "reporter", "reporters"]
+            
+            # Add --node parameter if RPC URL is provided
+            if self.rpc_url:
+                cmd.extend(["--node", self.rpc_url])
+            
             result = subprocess.run(
                 cmd,
                 capture_output=True,

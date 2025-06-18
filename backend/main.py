@@ -57,6 +57,9 @@ def parse_args():
     parser.add_argument('--source-dir', '-s', 
                        default=os.getenv('LAYER_SOURCE_DIR', 'source_tables'),
                        help='Directory containing CSV files (default: source_tables)')
+    parser.add_argument('--layer-rpc-url', 
+                       default=os.getenv('LAYER_RPC_URL', None),
+                       help='RPC URL for layerd commands (default: use layerd default)')
     
     # Only parse known args to avoid conflicts with uvicorn
     args, unknown = parser.parse_known_args()
@@ -620,7 +623,11 @@ async def startup_event():
             binary_path = Path("../layerd")
             if binary_path.exists():
                 logger.info("🔗 Initializing reporter fetcher...")
-                reporter_fetcher = ReporterFetcher(str(binary_path), update_interval=60)
+                reporter_fetcher = ReporterFetcher(
+                    str(binary_path), 
+                    update_interval=60,
+                    rpc_url=config.layer_rpc_url  # Add this parameter
+                )
                 
                 # Do initial fetch to populate reporters table
                 logger.info("📡 Performing initial reporter data fetch...")

@@ -16,6 +16,9 @@ def main():
     parser.add_argument('--source-dir', '-s', 
                        default=os.getenv('LAYER_SOURCE_DIR', 'source_tables'),
                        help='Directory containing CSV files (default: source_tables)')
+    parser.add_argument('--layer-rpc-url', 
+                       default=os.getenv('LAYER_RPC_URL', None),
+                       help='RPC URL for layerd commands')
     parser.add_argument('--port', '-p', 
                        default=8000, type=int,
                        help='Port to run the server on (default: 8000)')
@@ -62,6 +65,8 @@ def main():
     
     # Set environment variable for the backend
     os.environ['LAYER_SOURCE_DIR'] = str(source_dir.absolute())
+    if args.layer_rpc_url:
+        os.environ['LAYER_RPC_URL'] = args.layer_rpc_url
     
     # Change to backend directory
     os.chdir(backend_dir)
