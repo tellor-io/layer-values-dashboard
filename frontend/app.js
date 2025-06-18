@@ -4,6 +4,7 @@ let currentFilters = {};
 let isLoading = false;
 let totalRecords = 0;
 let pageLoadTime = new Date(); // Store page load time
+let isQuestionableFilterActive = false; // Track questionable filter state
 
 // Enhanced cellular detection
 const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -55,14 +56,9 @@ const elements = {
     questionableSubtitle: document.getElementById('questionable-subtitle'),
     urgentIndicator: document.getElementById('urgent-indicator'),
     
-    // Search and filters
-    searchInput: document.getElementById('search-input'),
-    searchBtn: document.getElementById('search-btn'),
-    filterReporter: document.getElementById('filter-reporter'),
-    filterQueryType: document.getElementById('filter-query-type'),
-    filterQueryId: document.getElementById('filter-query-id'),
-    applyFilters: document.getElementById('apply-filters'),
-    clearFilters: document.getElementById('clear-filters'),
+    // Header search
+    headerSearchInput: document.getElementById('header-search-input'),
+    headerSearchBtn: document.getElementById('header-search-btn'),
     
     // Data table
     dataTable: document.getElementById('data-table'),
@@ -384,6 +380,9 @@ const loadStats = async (forceRefresh = false) => {
         }
         
         // Populate filter dropdowns
+        // Note: Commenting out filter dropdowns that don't exist in the HTML
+        // to prevent JavaScript errors that stop loadStats from completing
+        /*
         if (stats.query_types) {
             elements.filterQueryType.innerHTML = '<option value="">All Types</option>';
             stats.query_types.forEach(type => {
@@ -408,10 +407,11 @@ const loadStats = async (forceRefresh = false) => {
                 elements.filterReporter.appendChild(option);
             });
         }
+        */
         
-        // Populate query ID dropdown
-        if (stats.top_query_ids) {
-            elements.filterQueryId.innerHTML = '<option value="">All Query IDs</option>';
+        // Populate query ID dropdown (only for power analytics modal)
+        if (stats.top_query_ids && elements.queryIdSelect) {
+            elements.queryIdSelect.innerHTML = '<option value="">Overall (All Query IDs)</option>';
             stats.top_query_ids.forEach(queryId => {
                 const option = document.createElement('option');
                 option.value = queryId.QUERY_ID;
@@ -420,7 +420,7 @@ const loadStats = async (forceRefresh = false) => {
                     : queryId.QUERY_ID;
                 option.textContent = `${shortQueryId} (${queryId.count})`;
                 option.title = queryId.QUERY_ID; // Full query ID on hover
-                elements.filterQueryId.appendChild(option);
+                elements.queryIdSelect.appendChild(option);
             });
         }
         
@@ -552,8 +552,13 @@ const formatAgreement = (reportedValue, trustedValue) => {
         return '-';
     }
     
+    // Handle perfect agreement
+    if (reportedValue === trustedValue) {
+        return '100.00%';
+    }
+    
     const percentDiff = Math.abs((reportedValue - trustedValue) / trustedValue);
-    const agreement = (1 - percentDiff) * 100;
+    const agreement = Math.max(0, (1 - percentDiff) * 100);
     
     // Format with 2 decimal places and add % sign
     return `${agreement.toFixed(2)}%`;
@@ -565,8 +570,13 @@ const getAgreementClass = (reportedValue, trustedValue) => {
         return 'agreement-na';
     }
     
+    // Handle perfect agreement
+    if (reportedValue === trustedValue) {
+        return 'agreement-perfect';
+    }
+    
     const percentDiff = Math.abs((reportedValue - trustedValue) / trustedValue);
-    const agreement = (1 - percentDiff) * 100;
+    const agreement = Math.max(0, (1 - percentDiff) * 100);
     
     if (agreement >= 99) return 'agreement-perfect';     // ≥99% agreement
     if (agreement >= 95) return 'agreement-good';       // ≥95% agreement  
@@ -669,17 +679,39 @@ const showDetails = (row) => {
 };
 
 const showQuestionableValues = async () => {
-    // Clear search input and existing filters
-    elements.searchInput.value = '';
-    elements.filterReporter.value = '';
-    elements.filterQueryType.value = '';
-    elements.filterQueryId.value = '';
+    // Clear header search input
+    elements.headerSearchInput.value = '';
     
-    // Set up questionable filter
-    currentFilters = { questionable_only: true };
-    currentPage = 1;
+    // Toggle questionable filter
+    if (isQuestionableFilterActive) {
+        // Remove filter - show all data
+        currentFilters = {};
+        currentPage = 1;
+        isQuestionableFilterActive = false;
+        
+        // Remove active styling
+        elements.questionableCard.classList.remove('filter-active');
+        
+        // Update subtitle to default
+        if (elements.questionableSubtitle.textContent.includes('Click to view')) {
+            // Keep the existing subtitle if it's the default
+        } else {
+            elements.questionableSubtitle.textContent = 'Click to view';
+        }
+    } else {
+        // Apply filter - show only questionable values
+        currentFilters = { questionable_only: true };
+        currentPage = 1;
+        isQuestionableFilterActive = true;
+        
+        // Add active styling
+        elements.questionableCard.classList.add('filter-active');
+        
+        // Update subtitle to indicate filter is active
+        elements.questionableSubtitle.textContent = 'Click to remove filter';
+    }
     
-    // Load data with questionable filter
+    // Load data with current filters
     await loadData(currentPage, currentFilters);
 };
 
@@ -1781,46 +1813,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Questionable values card click
     elements.questionableCard.addEventListener('click', showQuestionableValues);
     
-    // Search functionality
-    elements.searchBtn.addEventListener('click', () => {
-        const query = elements.searchInput.value;
-        searchData(query);
-    });
-    
-    elements.searchInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            const query = elements.searchInput.value;
-            searchData(query);
+    // Header search functionality - redirect to search page
+    elements.headerSearchBtn.addEventListener('click', () => {
+        const query = elements.headerSearchInput.value.trim();
+        if (query) {
+            window.location.href = `/dashboard/search?q=${encodeURIComponent(query)}`;
         }
     });
     
-    // Filter functionality
-    elements.applyFilters.addEventListener('click', () => {
-        currentFilters = {
-            reporter: elements.filterReporter.value,
-            query_type: elements.filterQueryType.value,
-            query_id: elements.filterQueryId.value
-        };
-        
-        // Remove empty filters
-        Object.keys(currentFilters).forEach(key => {
-            if (!currentFilters[key]) {
-                delete currentFilters[key];
+    elements.headerSearchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            const query = elements.headerSearchInput.value.trim();
+            if (query) {
+                window.location.href = `/dashboard/search?q=${encodeURIComponent(query)}`;
             }
-        });
-        
-        currentPage = 1;
-        loadData(currentPage, currentFilters);
-    });
-    
-    elements.clearFilters.addEventListener('click', () => {
-        elements.filterReporter.value = '';
-        elements.filterQueryType.value = '';
-        elements.filterQueryId.value = '';
-        
-        currentFilters = {};
-        currentPage = 1;
-        loadData(currentPage, currentFilters);
+        }
     });
     
     // Pagination
@@ -1955,7 +1962,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             switch (e.key) {
                 case 'k':
                     e.preventDefault();
-                    elements.searchInput.focus();
+                    elements.headerSearchInput.focus();
                     break;
                 case 'r':
                     e.preventDefault();

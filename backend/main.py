@@ -899,34 +899,24 @@ async def get_stats():
             
             stats["unique_query_ids_30d"] = unique_query_ids_30d
             
-            # Average agreement for most recent query ID
-            recent_query_agreement = conn.execute("""
-                WITH recent_query AS (
-                    SELECT QUERY_ID
-                    FROM layer_data
-                    ORDER BY TIMESTAMP DESC
-                    LIMIT 1
-                ),
-                recent_timestamp AS (
-                    SELECT TIMESTAMP
-                    FROM layer_data
-                    ORDER BY TIMESTAMP DESC
-                    LIMIT 1
-                )
+            # Average agreement calculation - simplified and more robust
+            # Calculate agreement percentage for all records where both values exist
+            average_agreement_result = conn.execute("""
                 SELECT 
                     AVG(CASE 
-                        WHEN ld.TRUSTED_VALUE != 0 THEN 
-                            (1 - ABS((ld.VALUE - ld.TRUSTED_VALUE) / ld.TRUSTED_VALUE)) * 100
+                        WHEN VALUE = TRUSTED_VALUE THEN 100.0
+                        WHEN TRUSTED_VALUE != 0 THEN 
+                            GREATEST(0, (1 - ABS((VALUE - TRUSTED_VALUE) / TRUSTED_VALUE)) * 100)
                         ELSE NULL 
                     END) as avg_agreement
-                FROM recent_query rq
-                JOIN recent_timestamp rt ON 1=1
-                JOIN layer_data ld ON rq.QUERY_ID = ld.QUERY_ID AND rt.TIMESTAMP = ld.TIMESTAMP
-                WHERE ld.TRUSTED_VALUE != 0
+                FROM layer_data
+                WHERE VALUE IS NOT NULL 
+                AND TRUSTED_VALUE IS NOT NULL 
+                AND TRUSTED_VALUE != 0
             """).fetchone()
             
-            if recent_query_agreement and recent_query_agreement[0] is not None:
-                stats["average_agreement"] = round(recent_query_agreement[0], 2)
+            if average_agreement_result and average_agreement_result[0] is not None:
+                stats["average_agreement"] = round(average_agreement_result[0], 2)
             else:
                 stats["average_agreement"] = None
             
@@ -1158,33 +1148,151 @@ async def get_analytics(
         logger.error(f"❌ Analytics error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Analytics processing failed: {str(e)}")
 
+@dashboard_app.get("/search")
+async def serve_search_page():
+    """Serve the search page"""
+    try:
+        # Get the correct path relative to the backend directory
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        search_html_path = os.path.join(current_dir, "..", "frontend", "search.html")
+        
+        with open(search_html_path, "r") as f:
+            content = f.read()
+        return HTMLResponse(content=content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Search page not found")
+
 @dashboard_app.get("/api/search")
 async def search_data(
     q: str = Query(..., min_length=1),
-    limit: int = Query(50, ge=1, le=1000)
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
 ):
-    """Search across all text fields"""
+    """Enhanced search across all text fields with statistics and insights"""
     try:
-        search_query = f"""
-            SELECT * FROM layer_data 
-            WHERE 
-                REPORTER LIKE '%{q}%' OR
-                QUERY_ID LIKE '%{q}%' OR
-                TX_HASH LIKE '%{q}%' OR
-                CAST(VALUE AS VARCHAR) LIKE '%{q}%'
-            ORDER BY CURRENT_TIME DESC
-            LIMIT {limit}
-        """
-        
-        results = conn.execute(search_query).df()
-        
-        return {
-            "results": results.to_dict(orient="records"),
-            "count": len(results),
-            "query": q
-        }
+        with db_lock:
+            # Main search query with pagination
+            search_query = f"""
+                SELECT * FROM layer_data 
+                WHERE 
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ORDER BY TIMESTAMP DESC
+                LIMIT {limit} OFFSET {offset}
+            """
+            
+            results = conn.execute(search_query).df()
+            
+            # Get total count for pagination
+            count_query = f"""
+                SELECT COUNT(*) as total FROM layer_data 
+                WHERE 
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+            """
+            
+            total_count = conn.execute(count_query).fetchone()[0]
+            
+            # Generate statistics and insights
+            stats_query = f"""
+                SELECT 
+                    COUNT(*) as total_matches,
+                    COUNT(DISTINCT REPORTER) as unique_reporters,
+                    COUNT(DISTINCT QUERY_ID) as unique_query_ids,
+                    MIN(VALUE) as min_value,
+                    MAX(VALUE) as max_value,
+                    AVG(CASE WHEN VALUE = TRUSTED_VALUE THEN 1.0 ELSE 0.0 END) as avg_agreement,
+                    MIN(TIMESTAMP) as oldest_timestamp,
+                    MAX(TIMESTAMP) as newest_timestamp,
+                    SUM(POWER) as total_power
+                FROM layer_data 
+                WHERE 
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+            """
+            
+            stats_result = conn.execute(stats_query).fetchone()
+            
+            # Get top reporter for this search
+            top_reporter_query = f"""
+                SELECT REPORTER, COUNT(*) as count
+                FROM layer_data 
+                WHERE 
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                GROUP BY REPORTER
+                ORDER BY count DESC
+                LIMIT 1
+            """
+            
+            top_reporter_result = conn.execute(top_reporter_query).fetchone()
+            
+            # Get top query ID for this search
+            top_query_id_query = f"""
+                SELECT QUERY_ID, COUNT(*) as count
+                FROM layer_data 
+                WHERE 
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                GROUP BY QUERY_ID
+                ORDER BY count DESC
+                LIMIT 1
+            """
+            
+            top_query_id_result = conn.execute(top_query_id_query).fetchone()
+            
+            # Build stats object
+            stats = {
+                "total_matches": stats_result[0] if stats_result[0] else 0,
+                "unique_reporters": stats_result[1] if stats_result[1] else 0,
+                "unique_query_ids": stats_result[2] if stats_result[2] else 0,
+                "value_range": {
+                    "min": stats_result[3] if stats_result[3] is not None else None,
+                    "max": stats_result[4] if stats_result[4] is not None else None
+                } if stats_result[3] is not None and stats_result[4] is not None else None,
+                "avg_agreement": stats_result[5] if stats_result[5] is not None else None,
+                "time_range": {
+                    "oldest": stats_result[6] if stats_result[6] else None,
+                    "newest": stats_result[7] if stats_result[7] else None
+                } if stats_result[6] and stats_result[7] else None,
+                "power_stats": {
+                    "total": stats_result[8] if stats_result[8] else 0
+                },
+                "top_reporter": {
+                    "reporter": top_reporter_result[0],
+                    "count": top_reporter_result[1]
+                } if top_reporter_result else None,
+                "top_query_id": {
+                    "query_id": top_query_id_result[0],
+                    "count": top_query_id_result[1]
+                } if top_query_id_result else None
+            }
+            
+            return {
+                "data": results.to_dict(orient="records"),
+                "stats": stats,
+                "pagination": {
+                    "total": total_count,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": offset + limit < total_count
+                },
+                "query": q
+            }
         
     except Exception as e:
+        logger.error(f"Search error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @dashboard_app.get("/api/query-analytics")

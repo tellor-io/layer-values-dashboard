@@ -13,45 +13,6 @@
     <div class="app">
         <!-- Main Content -->
         <main class="main">
-            <!-- Control Panel -->
-            <div class="control-panel">
-                <div class="search-section">
-                    <div class="search-box">
-                        <i class="fas fa-search"></i>
-                        <input type="text" id="search-input" placeholder="Search reporters, hashes, values...">
-                        <button id="search-btn" class="btn btn-primary">Search</button>
-                    </div>
-                </div>
-
-                <div class="filters-section">
-                    <h3>Filters</h3>
-                    <div class="filter-grid">
-                        <div class="filter-group">
-                            <label>Reporter</label>
-                            <select id="filter-reporter">
-                                <option value="">All Reporters</option>
-                            </select>
-                        </div>
-                        <div class="filter-group">
-                            <label>Query Type</label>
-                            <select id="filter-query-type">
-                                <option value="">All Types</option>
-                            </select>
-                        </div>
-                        <div class="filter-group">
-                            <label>Query ID</label>
-                            <select id="filter-query-id">
-                                <option value="">All Query IDs</option>
-                            </select>
-                        </div>
-                        <div class="filter-details">
-                            <button id="apply-filters" class="btn btn-secondary">Apply Filters</button>
-                            <button id="clear-filters" class="btn btn-secondary">Clear</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
             <!-- Stats Dashboard -->
             <div class="stats-dashboard">
                 <div class="stats-grid">
@@ -154,6 +115,11 @@
                         </div>
                     </div>
                     <div class="data-controls">
+                        <div class="header-search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="header-search-input" placeholder="Search anything in the data...">
+                            <button id="header-search-btn" class="btn btn-primary">Search</button>
+                        </div>
                         <a href="/dashboard/reporters" class="btn btn-secondary">
                             <i class="fas fa-users"></i> View Reporters
                         </a>
