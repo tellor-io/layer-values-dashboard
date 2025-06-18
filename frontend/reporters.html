@@ -12,38 +12,7 @@
     <div class="app">
         <!-- Main Content -->
         <main class="main">
-            <!-- Header Section -->
-            <div class="control-panel">
-                <div class="data-header">
-                    <div class="data-header-left">
-                        <h2>
-                            <i class="fas fa-users"></i>
-                            Tellor Reporters
-                        </h2>
-                        <div class="header-stats">
-                            <div class="stat-item">
-                                <span class="stat-label">Total Reporters</span>
-                                <span class="stat-value" id="totalReporters">-</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-label">Last Updated</span>
-                                <span class="stat-value">
-                                    <i class="fas fa-clock"></i>
-                                    <span id="last-updated">Loading...</span>
-                                </span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="data-controls">
-                        <a href="/dashboard/" class="btn btn-secondary">
-                            <i class="fas fa-arrow-left"></i> Back to Dashboard
-                        </a>
-                        <button id="refresh-data" class="btn btn-primary">
-                            <i class="fas fa-sync"></i> Refresh
-                        </button>
-                    </div>
-                </div>
-            </div>
+
 
             <!-- Stats Dashboard -->
             <div class="stats-dashboard">
@@ -78,62 +47,12 @@
                             <div class="stat-subtitle">Currently jailed</div>
                         </div>
                     </div>
-                    <div class="stat-card">
-                        <div class="stat-icon">
-                            <i class="fas fa-chart-line"></i>
-                        </div>
-                        <div class="stat-content">
-                            <div class="stat-number" id="totalPower">-</div>
-                            <div class="stat-title">Total Power</div>
-                            <div class="stat-subtitle">Sum of all reporter power</div>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-icon">
-                            <i class="fas fa-chart-bar"></i>
-                        </div>
-                        <div class="stat-content">
-                            <div class="stat-number" id="avgPower">-</div>
-                            <div class="stat-title">Average Power</div>
-                            <div class="stat-subtitle">Mean power per reporter</div>
-                        </div>
-                    </div>
+
+
                 </div>
             </div>
 
-            <!-- Controls Section -->
-            <div class="control-panel">
-                <div class="filters-section">
-                    <h3>Search & Filter</h3>
-                    <div class="filter-grid">
-                        <div class="filter-group">
-                            <label>Search</label>
-                            <input type="text" id="searchBox" placeholder="Search by moniker or address...">
-                        </div>
-                        <div class="filter-group">
-                            <label>Status</label>
-                            <select id="filterSelect">
-                                <option value="">All Reporters</option>
-                                <option value="active">Active Only</option>
-                                <option value="jailed">Jailed Only</option>
-                            </select>
-                        </div>
-                        <div class="filter-group">
-                            <label>Sort By</label>
-                            <select id="sortSelect">
-                                <option value="power">Power</option>
-                                <option value="moniker">Moniker</option>
-                                <option value="commission_rate">Commission</option>
-                                <option value="last_updated">Last Updated</option>
-                            </select>
-                        </div>
-                        <div class="filter-details">
-                            <button id="apply-filters" class="btn btn-primary">Apply</button>
-                            <button id="clear-filters" class="btn btn-secondary">Clear</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
+
 
             <!-- Data Section -->
             <div class="data-section">
@@ -149,6 +68,14 @@
                                 <span class="stat-value" id="showing-info">0 of 0 reporters</span>
                             </div>
                         </div>
+                    </div>
+                    <div class="data-controls">
+                        <a href="/dashboard/" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Dashboard
+                        </a>
+                        <button id="refresh-data" class="btn btn-primary">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
                     </div>
                 </div>
 
@@ -214,62 +141,24 @@
                 try {
                     await this.loadSummary();
                     await this.loadReporters();
-                    this.updateTimestamp();
                 } finally {
                     this.hideLoadingOverlay();
                 }
             }
             
             initializeEventListeners() {
-                const searchBox = document.getElementById('searchBox');
-                const filterSelect = document.getElementById('filterSelect');
-                const sortSelect = document.getElementById('sortSelect');
                 const refreshBtn = document.getElementById('refresh-data');
-                const applyBtn = document.getElementById('apply-filters');
-                const clearBtn = document.getElementById('clear-filters');
                 const prevBtn = document.getElementById('prev-page');
                 const nextBtn = document.getElementById('next-page');
-                
-                searchBox.addEventListener('input', () => {
-                    clearTimeout(this.searchTimeout);
-                    this.searchTimeout = setTimeout(() => {
-                        this.currentPage = 0;
-                        this.loadReporters();
-                    }, 300);
-                });
-                
-                filterSelect.addEventListener('change', () => {
-                    this.currentPage = 0;
-                    this.loadReporters();
-                });
-                
-                sortSelect.addEventListener('change', () => {
-                    this.currentPage = 0;
-                    this.loadReporters();
-                });
                 
                 refreshBtn.addEventListener('click', async () => {
                     this.showLoadingOverlay();
                     try {
                         await this.loadSummary();
                         await this.loadReporters();
-                        this.updateTimestamp();
                     } finally {
                         this.hideLoadingOverlay();
                     }
-                });
-                
-                applyBtn.addEventListener('click', () => {
-                    this.currentPage = 0;
-                    this.loadReporters();
-                });
-                
-                clearBtn.addEventListener('click', () => {
-                    searchBox.value = '';
-                    filterSelect.value = '';
-                    sortSelect.value = 'power';
-                    this.currentPage = 0;
-                    this.loadReporters();
                 });
                 
                 prevBtn.addEventListener('click', () => {
@@ -289,8 +178,7 @@
             }
             
             updateTimestamp() {
-                const now = new Date();
-                document.getElementById('last-updated').textContent = now.toLocaleTimeString();
+                // No longer needed since header was removed
             }
             
             showLoadingOverlay() {
@@ -308,15 +196,10 @@
                     const response = await fetch('/dashboard/api/reporters-summary');
                     const data = await response.json();
                     
-                    // Update header stats
-                    document.getElementById('totalReporters').textContent = data.summary.total_reporters.toLocaleString();
-                    
                     // Update stat cards
                     document.getElementById('totalReportersCard').textContent = data.summary.total_reporters.toLocaleString();
                     document.getElementById('activeReporters').textContent = data.summary.active_reporters.toLocaleString();
                     document.getElementById('jailedReporters').textContent = data.summary.jailed_reporters.toLocaleString();
-                    document.getElementById('totalPower').textContent = data.summary.total_power.toLocaleString();
-                    document.getElementById('avgPower').textContent = Math.round(data.summary.avg_power).toLocaleString();
                     
                     this.maxPower = data.summary.max_power;
                 } catch (error) {
@@ -343,18 +226,8 @@
                     const params = new URLSearchParams({
                         limit: this.pageSize,
                         offset: this.currentPage * this.pageSize,
-                        sort_by: document.getElementById('sortSelect').value
+                        sort_by: 'power'
                     });
-                    
-                    const search = document.getElementById('searchBox').value.trim();
-                    if (search) {
-                        params.append('search', search);
-                    }
-                    
-                    const filter = document.getElementById('filterSelect').value;
-                    if (filter === 'jailed') {
-                        params.append('jailed_only', 'true');
-                    }
                     
                     const response = await fetch(`/dashboard/api/reporters?${params}`);
                     const data = await response.json();
@@ -399,7 +272,7 @@
                 const html = reporters.map(reporter => {
                     const powerPercent = this.maxPower > 0 ? (reporter.power / this.maxPower) * 100 : 0;
                     const statusClass = reporter.jailed ? 'badge-danger' : (reporter.power > 0 ? 'badge-success' : 'badge-secondary');
-                    const statusText = reporter.jailed ? 'Jailed' : (reporter.power > 0 ? 'Active' : 'Inactive');
+                    const statusText = reporter.jailed ? 'Jailed' : (reporter.power > 0 ? 'Free' : 'Jailed');
                     const commissionPercent = (parseFloat(reporter.commission_rate) / 1e18 * 100).toFixed(1);
                     
                     return `
@@ -472,7 +345,6 @@
             try {
                 await app.loadSummary();
                 await app.loadReporters();
-                app.updateTimestamp();
             } catch (error) {
                 console.error('Auto-refresh error:', error);
             }

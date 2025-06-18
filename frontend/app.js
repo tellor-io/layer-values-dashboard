@@ -121,6 +121,9 @@ const elements = {
     averageAgreement: document.getElementById('average-agreement'),
     agreementCard: document.getElementById('agreement-card'),
     
+    // Total potential power card
+    totalPotentialPower: document.getElementById('total-potential-power'),
+    
     // Agreement analytics modal
     agreementAnalyticsModal: document.getElementById('agreement-analytics-modal'),
     agreementAnalyticsModalClose: document.getElementById('agreement-analytics-modal-close'),
@@ -216,7 +219,7 @@ const updateLoadTime = () => {
 };
 
 // Enhanced API call with cellular optimizations
-const apiCall = async (endpoint, params = {}, retries = MAX_RETRIES) => {
+const apiCall = async (endpoint, params = {}, retries = MAX_RETRIES, forceRefresh = false) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     
@@ -228,12 +231,25 @@ const apiCall = async (endpoint, params = {}, retries = MAX_RETRIES) => {
             }
         });
         
-        console.log(`📡 ${IS_CELLULAR ? 'CELLULAR' : (IS_MOBILE ? 'MOBILE' : 'DESKTOP')} API Call: ${endpoint}`);
+        // Add cache-busting timestamp for forced refreshes
+        if (forceRefresh) {
+            url.searchParams.append('_t', Date.now().toString());
+        }
+        
+        console.log(`📡 ${IS_CELLULAR ? 'CELLULAR' : (IS_MOBILE ? 'MOBILE' : 'DESKTOP')} API Call: ${endpoint}${forceRefresh ? ' (FORCE REFRESH)' : ''}`);
         
         const headers = {
-            'X-Mobile-Request': IS_MOBILE ? 'true' : 'false',
-            'Cache-Control': IS_CELLULAR ? 'max-age=60' : (IS_MOBILE ? 'max-age=120' : 'max-age=300')
+            'X-Mobile-Request': IS_MOBILE ? 'true' : 'false'
         };
+        
+        // Set cache control headers based on refresh mode
+        if (forceRefresh) {
+            headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+            headers['Pragma'] = 'no-cache';
+            headers['Expires'] = '0';
+        } else {
+            headers['Cache-Control'] = IS_CELLULAR ? 'max-age=60' : (IS_MOBILE ? 'max-age=120' : 'max-age=300');
+        }
         
         // Add cellular connection indicator
         if (IS_CELLULAR) {
@@ -270,7 +286,7 @@ const apiCall = async (endpoint, params = {}, retries = MAX_RETRIES) => {
             const retryDelay = IS_CELLULAR ? 2000 : 1000;
             console.log(`🔄 Retrying API call: ${endpoint} (${retries} retries left)`);
             await new Promise(resolve => setTimeout(resolve, retryDelay));
-            return apiCall(endpoint, params, retries - 1);
+            return apiCall(endpoint, params, retries - 1, forceRefresh);
         }
         
         if (IS_CELLULAR) {
@@ -307,12 +323,12 @@ const showCellularErrorMessage = (error) => {
     }, 8000);
 };
 
-const loadStats = async () => {
+const loadStats = async (forceRefresh = false) => {
     try {
         const [info, stats, reportersSummary] = await Promise.all([
-            apiCall('/info'),
-            apiCall('/stats'),
-            apiCall('/reporters-summary')
+            apiCall('/info', {}, MAX_RETRIES, forceRefresh),
+            apiCall('/stats', {}, MAX_RETRIES, forceRefresh),
+            apiCall('/reporters-summary', {}, MAX_RETRIES, forceRefresh)
         ]);
         
         // Update header stats
@@ -330,6 +346,13 @@ const loadStats = async () => {
             elements.totalReporterPower.textContent = `${utilizationPercent}%`;
         } else {
             elements.totalReporterPower.textContent = '-';
+        }
+        
+        // Update total potential power from reporters registry
+        if (reportersSummary.summary && reportersSummary.summary.total_power) {
+            elements.totalPotentialPower.textContent = formatNumber(reportersSummary.summary.total_power);
+        } else {
+            elements.totalPotentialPower.textContent = '-';
         }
         
         elements.recentActivity.textContent = formatNumber(stats.recent_activity);
@@ -416,7 +439,7 @@ const loadStats = async () => {
 };
 
 // Enhanced loading with mobile optimization
-const loadData = async (page = 1, filters = {}) => {
+const loadData = async (page = 1, filters = {}, forceRefresh = false) => {
     showLoading();
     
     try {
@@ -429,9 +452,9 @@ const loadData = async (page = 1, filters = {}) => {
             ...filters
         };
         
-        console.log(`📊 Loading data - Page: ${page}, Mobile: ${IS_MOBILE}, PageSize: ${pageSize}`);
+        console.log(`📊 Loading data - Page: ${page}, Mobile: ${IS_MOBILE}, PageSize: ${pageSize}${forceRefresh ? ' (FORCE REFRESH)' : ''}`);
         
-        const response = await apiCall('/data', params);
+        const response = await apiCall('/data', params, MAX_RETRIES, forceRefresh);
         
         // Update table
         renderTable(response.data);
@@ -494,16 +517,16 @@ const updatePagination = (page, totalPages, total, offset, additionalInfo = '') 
     elements.nextPage.disabled = page >= totalPages;
 };
 
-const searchData = async (query) => {
+const searchData = async (query, forceRefresh = false) => {
     if (!query.trim()) {
-        await loadData(1, currentFilters);
+        await loadData(1, currentFilters, forceRefresh);
         return;
     }
     
     showLoading();
     
     try {
-        const response = await apiCall('/search', { q: query.trim() });
+        const response = await apiCall('/search', { q: query.trim() }, MAX_RETRIES, forceRefresh);
         
         // Update table with search results
         renderTable(response.results);
@@ -1349,7 +1372,7 @@ const showPowerInfo = (data) => {
     // Show total power
     infoHTML += `
         <div class="info-item">
-            <span class="info-label">Total Power:</span>
+            <span class="info-label">Total Power This Aggregate:</span>
             <span class="info-value highlight">${formatNumber(data.total_power)}</span>
         </div>
     `;
@@ -1817,9 +1840,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         pageLoadTime = new Date();
         updateLoadTime();
         
-        // Refresh data and stats
-        loadStats();
-        loadData(currentPage, currentFilters);
+        // Refresh data and stats with cache busting
+        loadStats(true);  // Force refresh for stats
+        loadData(currentPage, currentFilters, true);  // Force refresh for data
     });
     
     // Modal functionality
@@ -1939,8 +1962,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     // Update load time when refreshing via keyboard
                     pageLoadTime = new Date();
                     updateLoadTime();
-                    loadStats();
-                    loadData(currentPage, currentFilters);
+                    loadStats(true);  // Force refresh for stats
+                    loadData(currentPage, currentFilters, true);  // Force refresh for data
                     break;
             }
         }
