@@ -86,13 +86,14 @@
                                 <th>Reporter</th>
                                 <th>Power</th>
                                 <th>Commission</th>
-                                <th>Status</th>
+                                <th>Jailed Status</th>
+                                <th>Active Status</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="reportersTableBody">
                             <tr>
-                                <td colspan="5" class="text-center">
+                                <td colspan="6" class="text-center">
                                     <div class="loading">
                                         <i class="fas fa-spinner fa-spin"></i> Loading reporters...
                                     </div>
@@ -214,7 +215,7 @@
                 // Show loading state
                 tableBody.innerHTML = `
                     <tr>
-                        <td colspan="5" class="text-center">
+                        <td colspan="6" class="text-center">
                             <div class="loading">
                                 <i class="fas fa-spinner fa-spin"></i> Loading reporters...
                             </div>
@@ -245,7 +246,7 @@
                     console.error('Error loading reporters:', error);
                     tableBody.innerHTML = `
                         <tr>
-                            <td colspan="5" class="text-center">
+                            <td colspan="6" class="text-center">
                                 <div class="error">
                                     <i class="fas fa-exclamation-triangle"></i> Error loading reporters. Please try again.
                                 </div>
@@ -261,7 +262,7 @@
                 if (reporters.length === 0) {
                     tableBody.innerHTML = `
                         <tr>
-                            <td colspan="5" class="text-center">
+                            <td colspan="6" class="text-center">
                                 <div class="loading">No reporters found.</div>
                             </td>
                         </tr>
@@ -274,6 +275,10 @@
                     const statusClass = reporter.jailed ? 'badge-danger' : (reporter.power > 0 ? 'badge-success' : 'badge-secondary');
                     const statusText = reporter.jailed ? 'Jailed' : (reporter.power > 0 ? 'Free' : 'Jailed');
                     const commissionPercent = (parseFloat(reporter.commission_rate) / 1e18 * 100).toFixed(1);
+                    
+                    // Active status logic
+                    const activeClass = reporter.active_24h ? 'badge-success' : 'badge-secondary';
+                    const activeText = reporter.active_24h ? 'Active' : 'Inactive';
                     
                     return `
                         <tr>
@@ -296,6 +301,9 @@
                             </td>
                             <td>
                                 <span class="badge ${statusClass}">${statusText}</span>
+                            </td>
+                            <td>
+                                <span class="badge ${activeClass}">${activeText}</span>
                             </td>
                             <td>
                                 <button onclick="app.viewReporter('${reporter.address}')" class="action-btn">

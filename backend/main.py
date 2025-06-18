@@ -2159,13 +2159,24 @@ async def get_reporters(
             count_query = f"SELECT COUNT(*) FROM reporters WHERE {where_clause}"
             total = conn.execute(count_query, list(params.values())).fetchone()[0]
             
-            # Get paginated data
+            # Get paginated data with activity status
             if search:
                 # When searching, use both search parameters
                 data_query = f"""
-                    SELECT address, moniker, commission_rate, jailed, jailed_until,
-                           last_updated, min_tokens_required, power, fetched_at
-                    FROM reporters 
+                    SELECT r.address, r.moniker, r.commission_rate, r.jailed, r.jailed_until,
+                           r.last_updated, r.min_tokens_required, r.power, r.fetched_at,
+                           CASE 
+                               WHEN ld.address IS NOT NULL THEN true 
+                               ELSE false 
+                           END as active_24h
+                    FROM reporters r
+                    LEFT JOIN (
+                        SELECT DISTINCT REPORTER as address
+                        FROM layer_data 
+                        WHERE CURRENT_TIME > (
+                            SELECT MAX(CURRENT_TIME) - 86400000 FROM layer_data
+                        )
+                    ) ld ON r.address = ld.address
                     WHERE {where_clause}
                     ORDER BY {sort_by} {sort_order}
                     LIMIT ? OFFSET ?
@@ -2177,9 +2188,20 @@ async def get_reporters(
                     params_list.extend([limit, offset])
             else:
                 data_query = f"""
-                    SELECT address, moniker, commission_rate, jailed, jailed_until,
-                           last_updated, min_tokens_required, power, fetched_at
-                    FROM reporters 
+                    SELECT r.address, r.moniker, r.commission_rate, r.jailed, r.jailed_until,
+                           r.last_updated, r.min_tokens_required, r.power, r.fetched_at,
+                           CASE 
+                               WHEN ld.address IS NOT NULL THEN true 
+                               ELSE false 
+                           END as active_24h
+                    FROM reporters r
+                    LEFT JOIN (
+                        SELECT DISTINCT REPORTER as address
+                        FROM layer_data 
+                        WHERE CURRENT_TIME > (
+                            SELECT MAX(CURRENT_TIME) - 86400000 FROM layer_data
+                        )
+                    ) ld ON r.address = ld.address
                     WHERE {where_clause}
                     ORDER BY {sort_by} {sort_order}
                     LIMIT ? OFFSET ?
@@ -2200,7 +2222,8 @@ async def get_reporters(
                     'last_updated': row[5].isoformat() if row[5] else None,
                     'min_tokens_required': int(row[6]),
                     'power': int(row[7]),
-                    'fetched_at': row[8].isoformat() if row[8] else None
+                    'fetched_at': row[8].isoformat() if row[8] else None,
+                    'active_24h': bool(row[9])
                 })
             
             return {
