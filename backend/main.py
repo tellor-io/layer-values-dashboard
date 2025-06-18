@@ -120,6 +120,84 @@ def create_duckdb_connection():
 conn = create_duckdb_connection()
 db_lock = threading.RLock()  # Use RLock instead of Lock for better thread safety
 
+def get_safe_timestamp_filter():
+    """
+    Get a WHERE clause that excludes incomplete blocks by filtering out the most recent timestamp.
+    
+    Returns:
+        tuple: (where_clause, params) for use in SQL queries
+        - where_clause: SQL condition to exclude incomplete blocks
+        - params: List of parameters for the where clause
+    """
+    try:
+        with db_lock:
+            # Get the most recent timestamp (potentially incomplete)
+            most_recent = conn.execute("""
+                SELECT MAX(TIMESTAMP) FROM layer_data
+            """).fetchone()
+            
+            if not most_recent or most_recent[0] is None:
+                # No data, no filter needed
+                return "1=1", []
+            
+            most_recent_timestamp = most_recent[0]
+            
+            # Check if we have any older timestamps
+            older_timestamps = conn.execute("""
+                SELECT COUNT(DISTINCT TIMESTAMP) 
+                FROM layer_data 
+                WHERE TIMESTAMP < ?
+            """, [most_recent_timestamp]).fetchone()
+            
+            if older_timestamps and older_timestamps[0] > 0:
+                # We have older data, so exclude the most recent timestamp
+                logger.info(f"🛡️  Filtering out potentially incomplete block at timestamp: {most_recent_timestamp}")
+                return "TIMESTAMP < ?", [most_recent_timestamp]
+            else:
+                # Only one timestamp exists, have to include it
+                logger.warning(f"⚠️  Only one timestamp block exists ({most_recent_timestamp}), including it despite potential incompleteness")
+                return "1=1", []
+                
+    except Exception as e:
+        logger.error(f"❌ Error getting safe timestamp filter: {e}")
+        # Fall back to no filter if there's an error
+        return "1=1", []
+
+def get_safe_timestamp_value():
+    """
+    Get the most recent safe (complete) timestamp value.
+    
+    Returns:
+        int or None: The most recent safe timestamp, or None if no safe data exists
+    """
+    try:
+        with db_lock:
+            # Get the second most recent timestamp (should be complete)
+            recent_timestamps = conn.execute("""
+                SELECT DISTINCT TIMESTAMP 
+                FROM layer_data 
+                ORDER BY TIMESTAMP DESC 
+                LIMIT 2
+            """).fetchall()
+            
+            if len(recent_timestamps) >= 2:
+                # Use second most recent timestamp for stability
+                safe_timestamp = recent_timestamps[1][0]
+                logger.debug(f"📈 Safe timestamp: {safe_timestamp}")
+                return safe_timestamp
+            elif len(recent_timestamps) == 1:
+                # Only one timestamp available
+                safe_timestamp = recent_timestamps[0][0]
+                logger.warning(f"⚠️  Only one timestamp available, using it: {safe_timestamp}")
+                return safe_timestamp
+            else:
+                # No data
+                return None
+                
+    except Exception as e:
+        logger.error(f"❌ Error getting safe timestamp value: {e}")
+        return None
+
 # Data storage
 data_info = {
     "tables": [],
@@ -775,7 +853,14 @@ async def get_data(
             where_conditions.append("DISPUTABLE = true")
             where_conditions.append(f"({current_time_ms} - TIMESTAMP) < {hours_72_ms}")
         
+        # Add safe timestamp filter to exclude incomplete blocks
+        safe_filter, safe_params = get_safe_timestamp_filter()
+        where_conditions.append(safe_filter)
+        
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
+        # Combine all parameters
+        all_params = list(params.values()) + safe_params
         
         # Use thread-safe database access
         with db_lock:
@@ -800,7 +885,7 @@ async def get_data(
                     FROM layer_data 
                     WHERE {where_clause}
                 """
-                total = conn.execute(count_query, list(params.values())).fetchone()[0]
+                total = conn.execute(count_query, all_params).fetchone()[0]
                 logger.info(f"🔍 Debug: Filtered total: {total}")
                 
                 # Calculate actual limit and offset
@@ -815,7 +900,7 @@ async def get_data(
                     WHERE {where_clause}
                     ORDER BY TIMESTAMP DESC
                     LIMIT {actual_limit + actual_offset}
-                """, list(params.values()))
+                """, all_params)
                 
                 # Get the paginated data from the temp table
                 result = conn.execute(f"""
@@ -888,21 +973,24 @@ async def get_stats():
         
         # Use thread-safe database access
         with db_lock:
-            # Basic counts
-            stats["total_rows"] = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()[0]
-            stats["unique_reporters"] = conn.execute("SELECT COUNT(DISTINCT REPORTER) FROM layer_data").fetchone()[0]
-            stats["unique_query_types"] = conn.execute("SELECT COUNT(DISTINCT QUERY_TYPE) FROM layer_data").fetchone()[0]
+            # Get safe timestamp filter for consistent data filtering
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Basic counts using safe timestamp filter
+            stats["total_rows"] = conn.execute(f"SELECT COUNT(*) FROM layer_data WHERE {safe_filter}", safe_params).fetchone()[0]
+            stats["unique_reporters"] = conn.execute(f"SELECT COUNT(DISTINCT REPORTER) FROM layer_data WHERE {safe_filter}", safe_params).fetchone()[0]
+            stats["unique_query_types"] = conn.execute(f"SELECT COUNT(DISTINCT QUERY_TYPE) FROM layer_data WHERE {safe_filter}", safe_params).fetchone()[0]
             
             # Unique query IDs in past 30 days
             days_30_ms = 30 * 24 * 60 * 60 * 1000  # 30 days in milliseconds
             current_time_ms = int(time.time() * 1000)
             start_time_30d = current_time_ms - days_30_ms
             
-            unique_query_ids_30d = conn.execute("""
+            unique_query_ids_30d = conn.execute(f"""
                 SELECT COUNT(DISTINCT QUERY_ID) 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ?
-            """, [start_time_30d]).fetchone()[0]
+                WHERE TIMESTAMP >= ? AND {safe_filter}
+            """, [start_time_30d] + safe_params).fetchone()[0]
             
             stats["unique_query_ids_30d"] = unique_query_ids_30d
             
@@ -942,25 +1030,8 @@ async def get_stats():
                 "median": value_stats[2]
             }
             
-            # Total reporter power using second most recent timestamp to avoid incomplete blocks
-            # (same logic as power analytics for consistency)
-            recent_timestamps = conn.execute("""
-                SELECT DISTINCT TIMESTAMP 
-                FROM layer_data 
-                ORDER BY TIMESTAMP DESC 
-                LIMIT 2
-            """).fetchall()
-            
-            if len(recent_timestamps) >= 2:
-                # Use second most recent timestamp for stability
-                target_timestamp = recent_timestamps[1][0]
-                logger.info(f"📈 Stats using second most recent timestamp for stability: {target_timestamp}")
-            elif len(recent_timestamps) == 1:
-                # If we only have one timestamp, use it but warn
-                target_timestamp = recent_timestamps[0][0]
-                logger.warning(f"⚠️  Only one timestamp available for stats, using: {target_timestamp}")
-            else:
-                target_timestamp = None
+            # Total reporter power using safe timestamp approach to avoid incomplete blocks
+            target_timestamp = get_safe_timestamp_value()
             
             if target_timestamp:
                 recent_timestamp_power = conn.execute("""
@@ -972,6 +1043,7 @@ async def get_stats():
                     WHERE TIMESTAMP = ?
                     GROUP BY TIMESTAMP
                 """, [target_timestamp]).fetchone()
+                logger.info(f"📈 Stats using safe timestamp: {target_timestamp}")
             else:
                 recent_timestamp_power = None
             
@@ -1195,31 +1267,36 @@ async def search_data(
     """Enhanced search across all text fields with statistics and insights"""
     try:
         with db_lock:
+            # Get safe timestamp filter to exclude incomplete blocks
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
             # Main search query with pagination
             search_query = f"""
                 SELECT * FROM layer_data 
-                WHERE 
+                WHERE (
                     REPORTER LIKE '%{q}%' OR
                     QUERY_ID LIKE '%{q}%' OR
                     TX_HASH LIKE '%{q}%' OR
                     CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
                 ORDER BY TIMESTAMP DESC
                 LIMIT {limit} OFFSET {offset}
             """
             
-            results = conn.execute(search_query).df()
+            results = conn.execute(search_query, safe_params).df()
             
             # Get total count for pagination
             count_query = f"""
                 SELECT COUNT(*) as total FROM layer_data 
-                WHERE 
+                WHERE (
                     REPORTER LIKE '%{q}%' OR
                     QUERY_ID LIKE '%{q}%' OR
                     TX_HASH LIKE '%{q}%' OR
                     CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
             """
             
-            total_count = conn.execute(count_query).fetchone()[0]
+            total_count = conn.execute(count_query, safe_params).fetchone()[0]
             
             # Generate statistics and insights
             stats_query = f"""
