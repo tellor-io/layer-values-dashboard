@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tellor Reporters - Layer Values Dashboard</title>
+    <link rel="stylesheet" href="./static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Header Section -->
+            <div class="control-panel">
+                <div class="data-header">
+                    <div class="data-header-left">
+                        <h2>
+                            <i class="fas fa-users"></i>
+                            Tellor Reporters
+                        </h2>
+                        <div class="header-stats">
+                            <div class="stat-item">
+                                <span class="stat-label">Total Reporters</span>
+                                <span class="stat-value" id="totalReporters">-</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Last Updated</span>
+                                <span class="stat-value">
+                                    <i class="fas fa-clock"></i>
+                                    <span id="last-updated">Loading...</span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="data-controls">
+                        <a href="/dashboard/" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Dashboard
+                        </a>
+                        <button id="refresh-data" class="btn btn-primary">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats Dashboard -->
+            <div class="stats-dashboard">
+                <div class="stats-grid" id="summaryCards">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="totalReportersCard">-</div>
+                            <div class="stat-title">Total Reporters</div>
+                            <div class="stat-subtitle">All registered reporters</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-bolt"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="activeReporters">-</div>
+                            <div class="stat-title">Active Reporters</div>
+                            <div class="stat-subtitle">With power > 0</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-ban"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="jailedReporters">-</div>
+                            <div class="stat-title">Jailed Reporters</div>
+                            <div class="stat-subtitle">Currently jailed</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-chart-line"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="totalPower">-</div>
+                            <div class="stat-title">Total Power</div>
+                            <div class="stat-subtitle">Sum of all reporter power</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-chart-bar"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="avgPower">-</div>
+                            <div class="stat-title">Average Power</div>
+                            <div class="stat-subtitle">Mean power per reporter</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Controls Section -->
+            <div class="control-panel">
+                <div class="filters-section">
+                    <h3>Search & Filter</h3>
+                    <div class="filter-grid">
+                        <div class="filter-group">
+                            <label>Search</label>
+                            <input type="text" id="searchBox" placeholder="Search by moniker or address...">
+                        </div>
+                        <div class="filter-group">
+                            <label>Status</label>
+                            <select id="filterSelect">
+                                <option value="">All Reporters</option>
+                                <option value="active">Active Only</option>
+                                <option value="jailed">Jailed Only</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Sort By</label>
+                            <select id="sortSelect">
+                                <option value="power">Power</option>
+                                <option value="moniker">Moniker</option>
+                                <option value="commission_rate">Commission</option>
+                                <option value="last_updated">Last Updated</option>
+                            </select>
+                        </div>
+                        <div class="filter-details">
+                            <button id="apply-filters" class="btn btn-primary">Apply</button>
+                            <button id="clear-filters" class="btn btn-secondary">Clear</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data Section -->
+            <div class="data-section">
+                <div class="data-header">
+                    <div class="data-header-left">
+                        <h2>
+                            <i class="fas fa-table"></i>
+                            Reporter Details
+                        </h2>
+                        <div class="header-stats">
+                            <div class="stat-item">
+                                <span class="stat-label">Showing</span>
+                                <span class="stat-value" id="showing-info">0 of 0 reporters</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <table class="data-table" id="reportersTable">
+                        <thead>
+                            <tr>
+                                <th>Reporter</th>
+                                <th>Power</th>
+                                <th>Commission</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reportersTableBody">
+                            <tr>
+                                <td colspan="5" class="text-center">
+                                    <div class="loading">
+                                        <i class="fas fa-spinner fa-spin"></i> Loading reporters...
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="pagination">
+                    <button id="prev-page" class="btn btn-secondary" disabled>
+                        <i class="fas fa-chevron-left"></i> Previous
+                    </button>
+                    <div class="page-info">
+                        <span>Page <span id="current-page">1</span> of <span id="total-pages">1</span></span>
+                    </div>
+                    <button id="next-page" class="btn btn-secondary">
+                        Next <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Loading overlay -->
+        <div class="loading-overlay hidden" id="loading-overlay">
+            <div class="spinner"></div>
+            <div class="loading-text">Loading reporter data...</div>
+        </div>
+    </div>
+
+    <script>
+        class ReportersApp {
+            constructor() {
+                this.currentPage = 0;
+                this.pageSize = 20;
+                this.totalReporters = 0;
+                this.maxPower = 0;
+                this.searchTimeout = null;
+                
+                this.initializeEventListeners();
+                this.loadInitialData();
+            }
+            
+            async loadInitialData() {
+                this.showLoadingOverlay();
+                try {
+                    await this.loadSummary();
+                    await this.loadReporters();
+                    this.updateTimestamp();
+                } finally {
+                    this.hideLoadingOverlay();
+                }
+            }
+            
+            initializeEventListeners() {
+                const searchBox = document.getElementById('searchBox');
+                const filterSelect = document.getElementById('filterSelect');
+                const sortSelect = document.getElementById('sortSelect');
+                const refreshBtn = document.getElementById('refresh-data');
+                const applyBtn = document.getElementById('apply-filters');
+                const clearBtn = document.getElementById('clear-filters');
+                const prevBtn = document.getElementById('prev-page');
+                const nextBtn = document.getElementById('next-page');
+                
+                searchBox.addEventListener('input', () => {
+                    clearTimeout(this.searchTimeout);
+                    this.searchTimeout = setTimeout(() => {
+                        this.currentPage = 0;
+                        this.loadReporters();
+                    }, 300);
+                });
+                
+                filterSelect.addEventListener('change', () => {
+                    this.currentPage = 0;
+                    this.loadReporters();
+                });
+                
+                sortSelect.addEventListener('change', () => {
+                    this.currentPage = 0;
+                    this.loadReporters();
+                });
+                
+                refreshBtn.addEventListener('click', async () => {
+                    this.showLoadingOverlay();
+                    try {
+                        await this.loadSummary();
+                        await this.loadReporters();
+                        this.updateTimestamp();
+                    } finally {
+                        this.hideLoadingOverlay();
+                    }
+                });
+                
+                applyBtn.addEventListener('click', () => {
+                    this.currentPage = 0;
+                    this.loadReporters();
+                });
+                
+                clearBtn.addEventListener('click', () => {
+                    searchBox.value = '';
+                    filterSelect.value = '';
+                    sortSelect.value = 'power';
+                    this.currentPage = 0;
+                    this.loadReporters();
+                });
+                
+                prevBtn.addEventListener('click', () => {
+                    if (this.currentPage > 0) {
+                        this.currentPage--;
+                        this.loadReporters();
+                    }
+                });
+                
+                nextBtn.addEventListener('click', () => {
+                    const totalPages = Math.ceil(this.totalReporters / this.pageSize);
+                    if (this.currentPage < totalPages - 1) {
+                        this.currentPage++;
+                        this.loadReporters();
+                    }
+                });
+            }
+            
+            updateTimestamp() {
+                const now = new Date();
+                document.getElementById('last-updated').textContent = now.toLocaleTimeString();
+            }
+            
+            showLoadingOverlay() {
+                const overlay = document.getElementById('loading-overlay');
+                overlay.classList.remove('hidden');
+            }
+            
+            hideLoadingOverlay() {
+                const overlay = document.getElementById('loading-overlay');
+                overlay.classList.add('hidden');
+            }
+            
+            async loadSummary() {
+                try {
+                    const response = await fetch('/dashboard/api/reporters-summary');
+                    const data = await response.json();
+                    
+                    // Update header stats
+                    document.getElementById('totalReporters').textContent = data.summary.total_reporters.toLocaleString();
+                    
+                    // Update stat cards
+                    document.getElementById('totalReportersCard').textContent = data.summary.total_reporters.toLocaleString();
+                    document.getElementById('activeReporters').textContent = data.summary.active_reporters.toLocaleString();
+                    document.getElementById('jailedReporters').textContent = data.summary.jailed_reporters.toLocaleString();
+                    document.getElementById('totalPower').textContent = data.summary.total_power.toLocaleString();
+                    document.getElementById('avgPower').textContent = Math.round(data.summary.avg_power).toLocaleString();
+                    
+                    this.maxPower = data.summary.max_power;
+                } catch (error) {
+                    console.error('Error loading summary:', error);
+                }
+            }
+            
+            async loadReporters() {
+                const tableBody = document.getElementById('reportersTableBody');
+                const showingInfo = document.getElementById('showing-info');
+                
+                // Show loading state
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="text-center">
+                            <div class="loading">
+                                <i class="fas fa-spinner fa-spin"></i> Loading reporters...
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                
+                try {
+                    const params = new URLSearchParams({
+                        limit: this.pageSize,
+                        offset: this.currentPage * this.pageSize,
+                        sort_by: document.getElementById('sortSelect').value
+                    });
+                    
+                    const search = document.getElementById('searchBox').value.trim();
+                    if (search) {
+                        params.append('search', search);
+                    }
+                    
+                    const filter = document.getElementById('filterSelect').value;
+                    if (filter === 'jailed') {
+                        params.append('jailed_only', 'true');
+                    }
+                    
+                    const response = await fetch(`/dashboard/api/reporters?${params}`);
+                    const data = await response.json();
+                    
+                    this.totalReporters = data.total;
+                    this.renderReporters(data.reporters);
+                    this.updatePaginationControls();
+                    
+                    // Update showing info
+                    const start = this.currentPage * this.pageSize + 1;
+                    const end = Math.min((this.currentPage + 1) * this.pageSize, this.totalReporters);
+                    showingInfo.textContent = `${start}-${end} of ${this.totalReporters.toLocaleString()} reporters`;
+                    
+                } catch (error) {
+                    console.error('Error loading reporters:', error);
+                    tableBody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="text-center">
+                                <div class="error">
+                                    <i class="fas fa-exclamation-triangle"></i> Error loading reporters. Please try again.
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }
+            }
+            
+            renderReporters(reporters) {
+                const tableBody = document.getElementById('reportersTableBody');
+                
+                if (reporters.length === 0) {
+                    tableBody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="text-center">
+                                <div class="loading">No reporters found.</div>
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+                
+                const html = reporters.map(reporter => {
+                    const powerPercent = this.maxPower > 0 ? (reporter.power / this.maxPower) * 100 : 0;
+                    const statusClass = reporter.jailed ? 'badge-danger' : (reporter.power > 0 ? 'badge-success' : 'badge-secondary');
+                    const statusText = reporter.jailed ? 'Jailed' : (reporter.power > 0 ? 'Active' : 'Inactive');
+                    const commissionPercent = (parseFloat(reporter.commission_rate) / 1e18 * 100).toFixed(1);
+                    
+                    return `
+                        <tr>
+                            <td>
+                                <div class="reporter">
+                                    <div class="reporter-moniker font-bold text-green">${this.escapeHtml(reporter.moniker || 'Unknown')}</div>
+                                    <div class="reporter-address font-mono text-xs text-gray">${this.escapeHtml(reporter.address)}</div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="power-display">
+                                    <div class="value font-bold text-green">${reporter.power.toLocaleString()}</div>
+                                    <div class="power-bar" style="background: #333; height: 4px; border-radius: 2px; margin-top: 4px;">
+                                        <div style="background: linear-gradient(90deg, #00ff88, #00d4ff); width: ${powerPercent}%; height: 100%; border-radius: 2px; transition: width 0.3s ease;"></div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="value font-bold">${commissionPercent}%</span>
+                            </td>
+                            <td>
+                                <span class="badge ${statusClass}">${statusText}</span>
+                            </td>
+                            <td>
+                                <button onclick="app.viewReporter('${reporter.address}')" class="action-btn">
+                                    <i class="fas fa-eye"></i> View
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+                
+                tableBody.innerHTML = html;
+            }
+            
+            updatePaginationControls() {
+                const totalPages = Math.ceil(this.totalReporters / this.pageSize);
+                const prevBtn = document.getElementById('prev-page');
+                const nextBtn = document.getElementById('next-page');
+                const currentPageSpan = document.getElementById('current-page');
+                const totalPagesSpan = document.getElementById('total-pages');
+                
+                // Update page numbers
+                currentPageSpan.textContent = this.currentPage + 1;
+                totalPagesSpan.textContent = totalPages;
+                
+                // Update button states
+                prevBtn.disabled = this.currentPage === 0;
+                nextBtn.disabled = this.currentPage >= totalPages - 1;
+            }
+            
+            viewReporter(address) {
+                // For now, just alert the address. Could be expanded to show a modal or navigate to detail page.
+                alert(`Reporter details for: ${address}\n\nThis could open a detailed view in a future update.`);
+            }
+            
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        }
+        
+        // Initialize the app
+        const app = new ReportersApp();
+        
+        // Auto-refresh every 5 minutes
+        setInterval(async () => {
+            try {
+                await app.loadSummary();
+                await app.loadReporters();
+                app.updateTimestamp();
+            } catch (error) {
+                console.error('Auto-refresh error:', error);
+            }
+        }, 5 * 60 * 1000);
+    </script>
+</body>
+</html> 

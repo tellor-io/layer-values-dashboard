@@ -31,6 +31,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Add chain_queries directory to path for importing reporter fetcher
+sys.path.append(str(Path(__file__).parent.parent / "chain_queries"))
+try:
+    from reporter_fetcher import ReporterFetcher
+    REPORTER_FETCHER_AVAILABLE = True
+    logger.info("✅ Reporter fetcher module loaded successfully")
+except Exception as e:
+    logger.warning(f"⚠️  Reporter fetcher not available: {e}")
+    REPORTER_FETCHER_AVAILABLE = False
+
+# Global reporter fetcher instance
+reporter_fetcher = None
+
 # Add this helper function FIRST
 def formatNumber(num):
     """Format numbers with commas for readability"""
@@ -592,17 +605,60 @@ def periodic_reload():
 @app.on_event("startup")
 async def startup_event():
     """Initialize data on startup"""
+    global reporter_fetcher
     logger.info("🚀 Starting Layer Values Dashboard")
     # Load data on startup
     load_csv_files()
     # Start periodic reload thread
     reload_thread = threading.Thread(target=periodic_reload, daemon=True)
     reload_thread.start()
+    
+    # Initialize and start reporter fetcher if available
+    if REPORTER_FETCHER_AVAILABLE:
+        try:
+            # Path to the layerd binary (relative to backend directory)
+            binary_path = Path("../layerd")
+            if binary_path.exists():
+                logger.info("🔗 Initializing reporter fetcher...")
+                reporter_fetcher = ReporterFetcher(str(binary_path), update_interval=60)
+                
+                # Do initial fetch to populate reporters table
+                logger.info("📡 Performing initial reporter data fetch...")
+                success = reporter_fetcher.fetch_and_store(conn)
+                if success:
+                    logger.info("✅ Initial reporter data fetch completed")
+                    
+                    # Check for unknown reporters and create placeholders
+                    unknown_reporters = reporter_fetcher.get_unknown_reporters(conn)
+                    if unknown_reporters:
+                        reporter_fetcher.create_placeholder_reporters(unknown_reporters, conn)
+                else:
+                    logger.warning("⚠️  Initial reporter data fetch failed")
+                
+                # Start periodic updates
+                reporter_fetcher.start_periodic_updates(conn)
+                logger.info("🚀 Reporter fetcher started successfully")
+            else:
+                logger.warning(f"⚠️  Binary not found at {binary_path}, reporter fetcher disabled")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize reporter fetcher: {e}")
+            reporter_fetcher = None
+    else:
+        logger.info("ℹ️  Reporter fetcher not available, skipping initialization")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
+    global reporter_fetcher
     logger.info("🛑 Shutting down Layer Values Dashboard")
+    
+    # Stop reporter fetcher if running
+    if reporter_fetcher:
+        try:
+            reporter_fetcher.stop_periodic_updates()
+            logger.info("🛑 Reporter fetcher stopped")
+        except Exception as e:
+            logger.error(f"❌ Error stopping reporter fetcher: {e}")
 
 @app.get("/")
 async def root_redirect():
@@ -616,6 +672,23 @@ async def serve_frontend():
     html_path = Path("../frontend/index.html")
     if not html_path.exists():
         raise HTTPException(status_code=404, detail="Frontend not found")
+    
+    # Read the HTML content and update asset paths
+    with open(html_path, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+    
+    # Update static asset paths to be relative to /dashboard/
+    html_content = html_content.replace('href="./static/', 'href="/dashboard/static/')
+    html_content = html_content.replace('src="./static/', 'src="/dashboard/static/')
+    
+    return HTMLResponse(content=html_content)
+
+@dashboard_app.get("/reporters")
+async def serve_reporters_page():
+    """Serve the reporters page"""
+    html_path = Path("../frontend/reporters.html")
+    if not html_path.exists():
+        raise HTTPException(status_code=404, detail="Reporters page not found")
     
     # Read the HTML content and update asset paths
     with open(html_path, 'r', encoding='utf-8') as f:
@@ -1812,6 +1885,258 @@ async def get_agreement_analytics(
             pass
             
         raise HTTPException(status_code=500, detail=f"Agreement analytics processing failed: {str(e)}")
+
+# ===========================================
+# REPORTER API ENDPOINTS
+# ===========================================
+
+@dashboard_app.get("/api/reporters")
+async def get_reporters(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = None,
+    jailed_only: Optional[bool] = None,
+    sort_by: Optional[str] = Query("power", regex="^(power|moniker|commission_rate|last_updated)$")
+):
+    """Get paginated list of reporters with optional filtering"""
+    try:
+        # Build WHERE clause
+        where_conditions = []
+        params = {}
+        
+        if search:
+            where_conditions.append("(moniker LIKE ? OR address LIKE ?)")
+            params['search1'] = f"%{search}%"
+            params['search2'] = f"%{search}%"
+        
+        if jailed_only:
+            where_conditions.append("jailed = true")
+        
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
+        # Determine sort order
+        sort_order = "DESC" if sort_by == "power" else "ASC"
+        
+        with db_lock:
+            # Get total count
+            count_query = f"SELECT COUNT(*) FROM reporters WHERE {where_clause}"
+            total = conn.execute(count_query, list(params.values())).fetchone()[0]
+            
+            # Get paginated data
+            if search:
+                # When searching, use both search parameters
+                data_query = f"""
+                    SELECT address, moniker, commission_rate, jailed, jailed_until,
+                           last_updated, min_tokens_required, power, fetched_at
+                    FROM reporters 
+                    WHERE {where_clause}
+                    ORDER BY {sort_by} {sort_order}
+                    LIMIT ? OFFSET ?
+                """
+                params_list = [params.get('search1'), params.get('search2')]
+                if jailed_only:
+                    params_list.extend([limit, offset])
+                else:
+                    params_list.extend([limit, offset])
+            else:
+                data_query = f"""
+                    SELECT address, moniker, commission_rate, jailed, jailed_until,
+                           last_updated, min_tokens_required, power, fetched_at
+                    FROM reporters 
+                    WHERE {where_clause}
+                    ORDER BY {sort_by} {sort_order}
+                    LIMIT ? OFFSET ?
+                """
+                params_list = [limit, offset] if not jailed_only else [limit, offset]
+            
+            result = conn.execute(data_query, params_list).fetchall()
+            
+            # Convert to list of dicts
+            reporters = []
+            for row in result:
+                reporters.append({
+                    'address': row[0],
+                    'moniker': row[1],
+                    'commission_rate': row[2],
+                    'jailed': bool(row[3]),
+                    'jailed_until': row[4].isoformat() if row[4] else None,
+                    'last_updated': row[5].isoformat() if row[5] else None,
+                    'min_tokens_required': int(row[6]),
+                    'power': int(row[7]),
+                    'fetched_at': row[8].isoformat() if row[8] else None
+                })
+            
+            return {
+                "reporters": reporters,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "sort_by": sort_by
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error getting reporters: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get reporters: {str(e)}")
+
+@dashboard_app.get("/api/reporters/{address}")
+async def get_reporter_detail(address: str):
+    """Get detailed information about a specific reporter"""
+    try:
+        with db_lock:
+            # Get reporter info
+            reporter_result = conn.execute("""
+                SELECT address, moniker, commission_rate, jailed, jailed_until,
+                       last_updated, min_tokens_required, power, fetched_at, updated_at
+                FROM reporters 
+                WHERE address = ?
+            """, [address]).fetchone()
+            
+            if not reporter_result:
+                raise HTTPException(status_code=404, detail="Reporter not found")
+            
+            reporter = {
+                'address': reporter_result[0],
+                'moniker': reporter_result[1],
+                'commission_rate': reporter_result[2],
+                'jailed': bool(reporter_result[3]),
+                'jailed_until': reporter_result[4].isoformat() if reporter_result[4] else None,
+                'last_updated': reporter_result[5].isoformat() if reporter_result[5] else None,
+                'min_tokens_required': int(reporter_result[6]),
+                'power': int(reporter_result[7]),
+                'fetched_at': reporter_result[8].isoformat() if reporter_result[8] else None,
+                'updated_at': reporter_result[9].isoformat() if reporter_result[9] else None
+            }
+            
+            # Get reporter's transaction stats
+            stats_result = conn.execute("""
+                SELECT 
+                    COUNT(*) as total_transactions,
+                    COUNT(DISTINCT QUERY_ID) as unique_queries,
+                    AVG(VALUE) as avg_value,
+                    MIN(TIMESTAMP) as first_transaction,
+                    MAX(TIMESTAMP) as last_transaction
+                FROM layer_data 
+                WHERE REPORTER = ?
+            """, [address]).fetchone()
+            
+            stats = {
+                'total_transactions': int(stats_result[0]) if stats_result[0] else 0,
+                'unique_queries': int(stats_result[1]) if stats_result[1] else 0,
+                'avg_value': float(stats_result[2]) if stats_result[2] else 0.0,
+                'first_transaction': pd.to_datetime(stats_result[3], unit='ms').isoformat() if stats_result[3] else None,
+                'last_transaction': pd.to_datetime(stats_result[4], unit='ms').isoformat() if stats_result[4] else None
+            }
+            
+            return {
+                "reporter": reporter,
+                "stats": stats
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error getting reporter detail: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get reporter detail: {str(e)}")
+
+@dashboard_app.get("/api/reporters-summary")
+async def get_reporters_summary():
+    """Get summary statistics about reporters"""
+    try:
+        with db_lock:
+            # Get basic stats
+            summary_result = conn.execute("""
+                SELECT 
+                    COUNT(*) as total_reporters,
+                    COUNT(CASE WHEN jailed = true THEN 1 END) as jailed_reporters,
+                    COUNT(CASE WHEN power > 0 THEN 1 END) as active_reporters,
+                    AVG(power) as avg_power,
+                    MAX(power) as max_power,
+                    SUM(power) as total_power
+                FROM reporters
+            """).fetchone()
+            
+            # Get top reporters by power
+            top_reporters = conn.execute("""
+                SELECT moniker, address, power
+                FROM reporters 
+                WHERE power > 0
+                ORDER BY power DESC 
+                LIMIT 10
+            """).fetchall()
+            
+            # Get commission rate distribution
+            commission_dist = conn.execute("""
+                SELECT 
+                    commission_rate,
+                    COUNT(*) as count
+                FROM reporters
+                GROUP BY commission_rate
+                ORDER BY count DESC
+                LIMIT 10
+            """).fetchall()
+            
+            return {
+                "summary": {
+                    "total_reporters": int(summary_result[0]) if summary_result[0] else 0,
+                    "jailed_reporters": int(summary_result[1]) if summary_result[1] else 0,
+                    "active_reporters": int(summary_result[2]) if summary_result[2] else 0,
+                    "avg_power": float(summary_result[3]) if summary_result[3] else 0.0,
+                    "max_power": int(summary_result[4]) if summary_result[4] else 0,
+                    "total_power": int(summary_result[5]) if summary_result[5] else 0
+                },
+                "top_reporters": [
+                    {
+                        "moniker": row[0],
+                        "address": row[1],
+                        "power": int(row[2])
+                    }
+                    for row in top_reporters
+                ],
+                "commission_distribution": [
+                    {
+                        "commission_rate": row[0],
+                        "count": int(row[1])
+                    }
+                    for row in commission_dist
+                ]
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error getting reporters summary: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get reporters summary: {str(e)}")
+
+@dashboard_app.get("/api/reporter-fetcher-status")
+async def get_reporter_fetcher_status():
+    """Get status of the reporter fetcher service"""
+    try:
+        global reporter_fetcher
+        
+        if not REPORTER_FETCHER_AVAILABLE:
+            return {
+                "available": False,
+                "reason": "Reporter fetcher module not available"
+            }
+        
+        if not reporter_fetcher:
+            return {
+                "available": False,
+                "reason": "Reporter fetcher not initialized"
+            }
+        
+        return {
+            "available": True,
+            "running": reporter_fetcher.is_running,
+            "last_fetch_time": reporter_fetcher.last_fetch_time.isoformat() if reporter_fetcher.last_fetch_time else None,
+            "update_interval": reporter_fetcher.update_interval,
+            "binary_path": str(reporter_fetcher.binary_path)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting reporter fetcher status: {e}")
+        return {
+            "available": False,
+            "reason": f"Error: {str(e)}"
+        }
 
 # Mount static files for dashboard
 dashboard_app.mount("/static", StaticFiles(directory="../frontend"), name="static")

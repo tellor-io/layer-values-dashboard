@@ -309,9 +309,10 @@ const showCellularErrorMessage = (error) => {
 
 const loadStats = async () => {
     try {
-        const [info, stats] = await Promise.all([
+        const [info, stats, reportersSummary] = await Promise.all([
             apiCall('/info'),
-            apiCall('/stats')
+            apiCall('/stats'),
+            apiCall('/reporters-summary')
         ]);
         
         // Update header stats
@@ -320,7 +321,17 @@ const loadStats = async () => {
         // Update stats cards
         elements.uniqueReporters.textContent = formatNumber(stats.unique_reporters);
         elements.uniqueQueryIds30d.textContent = formatNumber(stats.unique_query_ids_30d);
-        elements.totalReporterPower.textContent = stats.total_reporter_power ? formatValue(stats.total_reporter_power) : '-';
+        
+        // Calculate reporting power utilization percentage
+        if (stats.total_reporter_power && reportersSummary.summary && reportersSummary.summary.total_power) {
+            const reportingPower = stats.total_reporter_power;
+            const totalRegistryPower = reportersSummary.summary.total_power;
+            const utilizationPercent = (reportingPower / totalRegistryPower * 100).toFixed(1);
+            elements.totalReporterPower.textContent = `${utilizationPercent}%`;
+        } else {
+            elements.totalReporterPower.textContent = '-';
+        }
+        
         elements.recentActivity.textContent = formatNumber(stats.recent_activity);
         
         // Update questionable values

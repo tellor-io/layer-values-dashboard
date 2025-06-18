@@ -77,12 +77,12 @@
                     </div>
                     <div class="stat-card clickable" id="total-reporter-power-card">
                         <div class="stat-icon">
-                            <i class="fas fa-chart-line"></i>
+                            <i class="fas fa-percentage"></i>
                         </div>
                         <div class="stat-content">
                             <div class="stat-number" id="total-reporter-power">-</div>
-                            <div class="stat-title">Current Reporter Power</div>
-                            <div class="stat-subtitle">Click to view distribution</div>
+                            <div class="stat-title">Power Utilization</div>
+                            <div class="stat-subtitle">Reporting power vs total registry</div>
                         </div>
                     </div>
                     <div class="stat-card clickable" id="recent-activity-card">
@@ -144,6 +144,9 @@
                         </div>
                     </div>
                     <div class="data-controls">
+                        <a href="/dashboard/reporters" class="btn btn-primary">
+                            <i class="fas fa-users"></i> View Reporters
+                        </a>
                         <button id="refresh-data" class="btn btn-secondary">
                             <i class="fas fa-sync"></i> Refresh
                         </button>
