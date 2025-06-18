@@ -1728,6 +1728,7 @@ body {
     gap: 0.5rem;
     transition: border-color 0.2s;
     min-width: 300px;
+    position: relative;
 }
 
 .header-search-box:focus-within {
@@ -1751,6 +1752,16 @@ body {
 
 .header-search-box input::placeholder {
     color: #666;
+}
+
+.experimental-label {
+    position: absolute;
+    bottom: -28px;
+    right: 0;
+    font-size: 1.1rem;
+    color: #e60b0b;
+    font-style: italic;
+    opacity: 0.8;
 }
 
 /* Search Page Styles */
