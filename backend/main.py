@@ -942,22 +942,38 @@ async def get_stats():
                 "median": value_stats[2]
             }
             
-            # Total reporter power for the most recent timestamp
-            recent_timestamp_power = conn.execute("""
-                WITH recent_timestamp AS (
-                    SELECT TIMESTAMP 
-                    FROM layer_data 
-                    ORDER BY TIMESTAMP DESC 
-                    LIMIT 1
-                )
-                SELECT 
-                    rt.TIMESTAMP,
-                    SUM(ld.POWER) as total_power,
-                    COUNT(*) as reporter_count
-                FROM recent_timestamp rt
-                JOIN layer_data ld ON rt.TIMESTAMP = ld.TIMESTAMP
-                GROUP BY rt.TIMESTAMP
-            """).fetchone()
+            # Total reporter power using second most recent timestamp to avoid incomplete blocks
+            # (same logic as power analytics for consistency)
+            recent_timestamps = conn.execute("""
+                SELECT DISTINCT TIMESTAMP 
+                FROM layer_data 
+                ORDER BY TIMESTAMP DESC 
+                LIMIT 2
+            """).fetchall()
+            
+            if len(recent_timestamps) >= 2:
+                # Use second most recent timestamp for stability
+                target_timestamp = recent_timestamps[1][0]
+                logger.info(f"📈 Stats using second most recent timestamp for stability: {target_timestamp}")
+            elif len(recent_timestamps) == 1:
+                # If we only have one timestamp, use it but warn
+                target_timestamp = recent_timestamps[0][0]
+                logger.warning(f"⚠️  Only one timestamp available for stats, using: {target_timestamp}")
+            else:
+                target_timestamp = None
+            
+            if target_timestamp:
+                recent_timestamp_power = conn.execute("""
+                    SELECT 
+                        TIMESTAMP,
+                        SUM(POWER) as total_power,
+                        COUNT(*) as reporter_count
+                    FROM layer_data
+                    WHERE TIMESTAMP = ?
+                    GROUP BY TIMESTAMP
+                """, [target_timestamp]).fetchone()
+            else:
+                recent_timestamp_power = None
             
             if recent_timestamp_power:
                 stats["total_reporter_power"] = recent_timestamp_power[1]
