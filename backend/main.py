@@ -7,7 +7,7 @@ import sys
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
 import uvicorn
 from typing import Optional, List
 import threading
@@ -946,12 +946,19 @@ async def get_data(
                     logger.info(f"🔍 Debug: First row keys: {list(data[0].keys())}")
                     logger.info(f"🔍 Debug: First row sample: {data[0]}")
                 
-                return {
+                response_data = {
                     "data": data,
                     "total": total,
                     "limit": actual_limit,
                     "offset": actual_offset
                 }
+                
+                # Return with cache headers to prevent stale data on browser reload
+                response = JSONResponse(content=response_data)
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                response.headers["Pragma"] = "no-cache" 
+                response.headers["Expires"] = "0"
+                return response
                 
             except Exception as db_error:
                 logger.error(f"❌ Database error in get_data: {db_error}")
@@ -1118,7 +1125,12 @@ async def get_stats():
             
             stats["query_types"] = query_types
         
-        return stats
+        # Return with cache headers to prevent stale data on browser reload
+        response = JSONResponse(content=stats)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
         
     except Exception as e:
         logger.error(f"❌ Stats error: {e}")
@@ -1311,46 +1323,49 @@ async def search_data(
                     MAX(TIMESTAMP) as newest_timestamp,
                     SUM(POWER) as total_power
                 FROM layer_data 
-                WHERE 
+                WHERE (
                     REPORTER LIKE '%{q}%' OR
                     QUERY_ID LIKE '%{q}%' OR
                     TX_HASH LIKE '%{q}%' OR
                     CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
             """
             
-            stats_result = conn.execute(stats_query).fetchone()
+            stats_result = conn.execute(stats_query, safe_params).fetchone()
             
             # Get top reporter for this search
             top_reporter_query = f"""
                 SELECT REPORTER, COUNT(*) as count
                 FROM layer_data 
-                WHERE 
+                WHERE (
                     REPORTER LIKE '%{q}%' OR
                     QUERY_ID LIKE '%{q}%' OR
                     TX_HASH LIKE '%{q}%' OR
                     CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
                 GROUP BY REPORTER
                 ORDER BY count DESC
                 LIMIT 1
             """
             
-            top_reporter_result = conn.execute(top_reporter_query).fetchone()
+            top_reporter_result = conn.execute(top_reporter_query, safe_params).fetchone()
             
             # Get top query ID for this search
             top_query_id_query = f"""
                 SELECT QUERY_ID, COUNT(*) as count
                 FROM layer_data 
-                WHERE 
+                WHERE (
                     REPORTER LIKE '%{q}%' OR
                     QUERY_ID LIKE '%{q}%' OR
                     TX_HASH LIKE '%{q}%' OR
                     CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
                 GROUP BY QUERY_ID
                 ORDER BY count DESC
                 LIMIT 1
             """
             
-            top_query_id_result = conn.execute(top_query_id_query).fetchone()
+            top_query_id_result = conn.execute(top_query_id_query, safe_params).fetchone()
             
             # Build stats object
             stats = {
@@ -1379,7 +1394,7 @@ async def search_data(
                 } if top_query_id_result else None
             }
             
-            return {
+            response_data = {
                 "data": results.to_dict(orient="records"),
                 "stats": stats,
                 "pagination": {
@@ -1390,6 +1405,13 @@ async def search_data(
                 },
                 "query": q
             }
+            
+            # Return with cache headers to prevent stale data on browser reload
+            response = JSONResponse(content=response_data)
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
         
     except Exception as e:
         logger.error(f"Search error: {str(e)}")
@@ -1437,15 +1459,18 @@ async def get_query_analytics(
             
             logger.info(f"📈 Querying query ID data from {start_time} to {current_time_ms}")
             
-            # Get top query IDs in the timeframe
-            top_query_ids = conn.execute("""
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Get top query IDs in the timeframe with safe timestamp filtering
+            top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ? AND TIMESTAMP < ?
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
                 LIMIT 10
-            """, [start_time, current_time_ms]).fetchall()
+            """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_query_ids:
                 return {
@@ -1469,15 +1494,15 @@ async def get_query_analytics(
                     "short_name": query_id[:12] + "..." if len(query_id) > 15 else query_id
                 })
                 
-                # Get bucketed data for this query ID
-                results = conn.execute("""
+                # Get bucketed data for this query ID with safe timestamp filtering
+                results = conn.execute(f"""
                     WITH time_buckets AS (
                         SELECT 
                             TIMESTAMP,
                             FLOOR((TIMESTAMP - ?) / ?) as bucket_id
                         FROM layer_data 
                         WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
-                        AND QUERY_ID = ?
+                        AND QUERY_ID = ? AND {safe_filter}
                     )
                     SELECT 
                         bucket_id,
@@ -1485,7 +1510,7 @@ async def get_query_analytics(
                     FROM time_buckets
                     GROUP BY bucket_id
                     ORDER BY bucket_id
-                """, [start_time, interval_ms, start_time, current_time_ms, query_id]).fetchall()
+                """, [start_time, interval_ms, start_time, current_time_ms, query_id] + safe_params).fetchall()
                 
                 # Create complete time series for this query ID
                 buckets = []
@@ -1582,15 +1607,18 @@ async def get_reporter_analytics(
             
             logger.info(f"📈 Querying reporter data from {start_time} to {current_time_ms}")
             
-            # Get top reporters in the timeframe
-            top_reporters = conn.execute("""
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Get top reporters in the timeframe with safe timestamp filtering
+            top_reporters = conn.execute(f"""
                 SELECT REPORTER, COUNT(*) as count 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ? AND TIMESTAMP < ?
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
                 GROUP BY REPORTER 
                 ORDER BY count DESC 
                 LIMIT 15
-            """, [start_time, current_time_ms]).fetchall()
+            """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_reporters:
                 return {
@@ -1989,15 +2017,17 @@ async def get_agreement_analytics(
             logger.info(f"📈 Querying agreement data from {start_time} to {current_time_ms}")
             
             # Get top query IDs in the timeframe
-            top_query_ids = conn.execute("""
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ? AND TIMESTAMP < ?
-                AND TRUSTED_VALUE != 0
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND TRUSTED_VALUE != 0 AND {safe_filter}
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
                 LIMIT 10
-            """, [start_time, current_time_ms]).fetchall()
+            """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_query_ids:
                 return {
@@ -2021,8 +2051,8 @@ async def get_agreement_analytics(
                     "short_name": query_id[:12] + "..." if len(query_id) > 15 else query_id
                 })
                 
-                # Get bucketed deviation data for this query ID
-                results = conn.execute("""
+                # Get bucketed deviation data for this query ID with safe timestamp filtering
+                results = conn.execute(f"""
                     WITH time_buckets AS (
                         SELECT 
                             TIMESTAMP,
@@ -2030,8 +2060,7 @@ async def get_agreement_analytics(
                             ABS((VALUE - TRUSTED_VALUE) / TRUSTED_VALUE) * 100 as deviation_percent
                         FROM layer_data 
                         WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
-                        AND QUERY_ID = ?
-                        AND TRUSTED_VALUE != 0
+                        AND QUERY_ID = ? AND TRUSTED_VALUE != 0 AND {safe_filter}
                     )
                     SELECT 
                         bucket_id,
@@ -2039,7 +2068,7 @@ async def get_agreement_analytics(
                     FROM time_buckets
                     GROUP BY bucket_id
                     ORDER BY bucket_id
-                """, [start_time, interval_ms, start_time, current_time_ms, query_id]).fetchall()
+                """, [start_time, interval_ms, start_time, current_time_ms, query_id] + safe_params).fetchall()
                 
                 # Create complete time series for this query ID
                 buckets = []
