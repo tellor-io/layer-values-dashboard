@@ -2652,8 +2652,7 @@ async def get_reporters_activity_analytics(
                         FLOOR((TIMESTAMP - ?) / ?) as bucket_id,
                         COUNT(DISTINCT REPORTER) as active_reporters,
                         COUNT(*) as total_reports,
-                        SUM(POWER) as total_power_activity,
-                        SUM(COALESCE(POWER_OF_AGGR, 0)) as total_power_of_aggr
+                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY COALESCE(POWER_OF_AGGR, 0)) as representative_power_of_aggr
                     FROM layer_data 
                     WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
                     GROUP BY bucket_id
@@ -2662,8 +2661,7 @@ async def get_reporters_activity_analytics(
                     bs.bucket_id,
                     COALESCE(tb.active_reporters, 0) as active_reporters,
                     COALESCE(tb.total_reports, 0) as total_reports,
-                    COALESCE(tb.total_power_activity, 0) as total_power_activity,
-                    COALESCE(tb.total_power_of_aggr, 0) as total_power_of_aggr
+                    COALESCE(tb.representative_power_of_aggr, 0) as representative_power_of_aggr
                 FROM bucket_series bs
                 LEFT JOIN time_buckets tb ON bs.bucket_id = tb.bucket_id
                 ORDER BY bs.bucket_id
@@ -2672,8 +2670,7 @@ async def get_reporters_activity_analytics(
             # Create arrays efficiently using list comprehension
             total_reports_data = [row[2] for row in results]
             active_reporters_data = [row[1] for row in results]
-            total_power_activity_data = [row[3] for row in results]
-            total_power_of_aggr_data = [row[4] for row in results]
+            representative_power_of_aggr_data = [row[3] for row in results]
             
             # Generate time labels efficiently
             time_labels = []
@@ -2697,8 +2694,7 @@ async def get_reporters_activity_analytics(
                 "time_labels": time_labels,
                 "total_reports": total_reports_data,
                 "active_reporters": active_reporters_data,
-                "total_power_activity": total_power_activity_data,
-                "total_power_of_aggr": total_power_of_aggr_data
+                "representative_power_of_aggr": representative_power_of_aggr_data
             }
             
             # Return with cache headers
