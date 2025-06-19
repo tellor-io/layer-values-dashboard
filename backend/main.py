@@ -101,14 +101,34 @@ def create_duckdb_connection():
         # Create connection with valid global options
         conn = duckdb.connect(":memory:")
         
-        # Set memory and thread configuration
-        conn.execute("SET memory_limit='10GB'")
+        # Get available memory and set a reasonable limit
+        try:
+            import psutil
+            total_memory_gb = psutil.virtual_memory().total / (1024**3)
+            # Use 60% of available memory, but cap at 16GB for safety
+            memory_limit_gb = min(int(total_memory_gb * 0.6), 16)
+            conn.execute(f"SET memory_limit='{memory_limit_gb}GB'")
+            logger.info(f"✅ Set memory limit to {memory_limit_gb}GB (60% of {total_memory_gb:.1f}GB total)")
+        except Exception as mem_error:
+            logger.warning(f"⚠️  Could not set memory_limit: {mem_error}")
+            # Fallback to a reasonable default
+            conn.execute("SET memory_limit='8GB'")
+            logger.info("✅ Using fallback memory limit of 8GB")
+        
+        # Set thread configuration
         conn.execute("SET threads=3")
         conn.execute("SET temp_directory='/tmp/duckdb'")
         
         # Performance optimizations
         conn.execute("SET preserve_insertion_order=false")
         conn.execute("SET enable_progress_bar=false")
+        
+        # Additional CSV-specific optimizations
+        try:
+            conn.execute("SET enable_object_cache=true")
+            conn.execute("SET checkpoint_threshold='1GB'")
+        except Exception as opt_error:
+            logger.warning(f"⚠️  Could not set some optimization options: {opt_error}")
         
         logger.info("✅ Created DuckDB connection with optimized settings")
         return conn
@@ -279,26 +299,42 @@ def load_historical_table(table_info):
                 """).fetchall()
                 
                 logger.info(f"📋 Found {len(csv_columns)} columns in CSV:")
+                actual_columns = {}
                 for col in csv_columns:
-                    logger.info(f"   - {col[0]}: {col[1]}")
+                    col_name = col[0]
+                    col_type = col[1]
+                    # Handle URL-encoded column names
+                    clean_name = col_name.replace('+AF8-', '_').replace('%5F', '_')
+                    actual_columns[clean_name] = col_name
+                    logger.info(f"   - {col_name} ({clean_name}): {col_type}")
                 
-                # Load data directly with proper error handling
+                # Build the SELECT statement with actual column names
+                def get_actual_column(expected_name):
+                    if expected_name in actual_columns:
+                        return actual_columns[expected_name]
+                    # Try common variations
+                    for actual_name in actual_columns.values():
+                        if actual_name.replace('+AF8-', '_').replace('%5F', '_') == expected_name:
+                            return actual_name
+                    return expected_name  # fallback
+                
+                # Load data directly with proper error handling and column mapping
                 conn.execute(f"""
                     INSERT OR IGNORE INTO layer_data 
                     SELECT 
-                        REPORTER,
-                        QUERY_TYPE,
-                        QUERY_ID,
-                        AGGREGATE_METHOD,
-                        CYCLELIST,
-                        POWER,
-                        TIMESTAMP,
-                        TRUSTED_VALUE,
-                        TX_HASH,
-                        CURRENT_TIME,
-                        TIME_DIFF,
-                        VALUE,
-                        DISPUTABLE,
+                        "{get_actual_column('REPORTER')}" as REPORTER,
+                        "{get_actual_column('QUERY_TYPE')}" as QUERY_TYPE,
+                        "{get_actual_column('QUERY_ID')}" as QUERY_ID,
+                        "{get_actual_column('AGGREGATE_METHOD')}" as AGGREGATE_METHOD,
+                        "{get_actual_column('CYCLELIST')}" as CYCLELIST,
+                        "{get_actual_column('POWER')}" as POWER,
+                        "{get_actual_column('TIMESTAMP')}" as TIMESTAMP,
+                        "{get_actual_column('TRUSTED_VALUE')}" as TRUSTED_VALUE,
+                        "{get_actual_column('TX_HASH')}" as TX_HASH,
+                        "{get_actual_column('CURRENT_TIME')}" as CURRENT_TIME,
+                        "{get_actual_column('TIME_DIFF')}" as TIME_DIFF,
+                        "{get_actual_column('VALUE')}" as VALUE,
+                        "{get_actual_column('DISPUTABLE')}" as DISPUTABLE,
                         '{table_info['filename']}' as source_file
                     FROM read_csv_auto('{table_info['path']}', 
                         header=true,
@@ -323,19 +359,19 @@ def load_historical_table(table_info):
                     conn.execute(f"""
                         INSERT OR IGNORE INTO layer_data 
                         SELECT 
-                            CAST(REPORTER AS VARCHAR),
-                            CAST(QUERY_TYPE AS VARCHAR),
-                            CAST(QUERY_ID AS VARCHAR),
-                            CAST(AGGREGATE_METHOD AS VARCHAR),
-                            TRY_CAST(CYCLELIST AS BOOLEAN),
-                            TRY_CAST(POWER AS INTEGER),
-                            TRY_CAST(TIMESTAMP AS BIGINT),
-                            TRY_CAST(TRUSTED_VALUE AS DOUBLE),
-                            CAST(TX_HASH AS VARCHAR),
-                            TRY_CAST(CURRENT_TIME AS BIGINT),
-                            TRY_CAST(TIME_DIFF AS INTEGER),
-                            TRY_CAST(VALUE AS DOUBLE),
-                            TRY_CAST(DISPUTABLE AS BOOLEAN),
+                            CAST("{get_actual_column('REPORTER')}" AS VARCHAR) as REPORTER,
+                            CAST("{get_actual_column('QUERY_TYPE')}" AS VARCHAR) as QUERY_TYPE,
+                            CAST("{get_actual_column('QUERY_ID')}" AS VARCHAR) as QUERY_ID,
+                            CAST("{get_actual_column('AGGREGATE_METHOD')}" AS VARCHAR) as AGGREGATE_METHOD,
+                            TRY_CAST("{get_actual_column('CYCLELIST')}" AS BOOLEAN) as CYCLELIST,
+                            TRY_CAST("{get_actual_column('POWER')}" AS INTEGER) as POWER,
+                            TRY_CAST("{get_actual_column('TIMESTAMP')}" AS BIGINT) as TIMESTAMP,
+                            TRY_CAST("{get_actual_column('TRUSTED_VALUE')}" AS DOUBLE) as TRUSTED_VALUE,
+                            CAST("{get_actual_column('TX_HASH')}" AS VARCHAR) as TX_HASH,
+                            TRY_CAST("{get_actual_column('CURRENT_TIME')}" AS BIGINT) as CURRENT_TIME,
+                            TRY_CAST("{get_actual_column('TIME_DIFF')}" AS INTEGER) as TIME_DIFF,
+                            TRY_CAST("{get_actual_column('VALUE')}" AS DOUBLE) as VALUE,
+                            TRY_CAST("{get_actual_column('DISPUTABLE')}" AS BOOLEAN) as DISPUTABLE,
                             '{table_info['filename']}' as source_file
                         FROM read_csv_auto('{table_info['path']}', 
                             header=true,
@@ -433,26 +469,43 @@ def load_active_table(table_info, is_reload=False):
                 """).fetchall()
                 
                 logger.info(f"📋 Found {len(csv_columns)} columns in CSV:")
+                actual_columns = {}
                 for col in csv_columns:
-                    logger.info(f"   - {col[0]}: {col[1]}")
+                    col_name = col[0]
+                    col_type = col[1]
+                    # Handle URL-encoded column names
+                    clean_name = col_name.replace('+AF8-', '_').replace('%5F', '_')
+                    actual_columns[clean_name] = col_name
+                    logger.info(f"   - {col_name} ({clean_name}): {col_type}")
                 
-                # Load data directly with proper error handling
+                # Build the SELECT statement with actual column names
+                def get_actual_column(expected_name):
+                    if expected_name in actual_columns:
+                        return actual_columns[expected_name]
+                    # Try common variations  
+                    for actual_name in actual_columns.values():
+                        if actual_name.replace('+AF8-', '_').replace('%5F', '_') == expected_name:
+                            return actual_name
+                    return expected_name  # fallback
+                
+                logger.info("📥 Loading CSV data into database...")
+                # Load data directly with proper error handling and column mapping
                 conn.execute(f"""
                     INSERT OR IGNORE INTO layer_data 
                     SELECT 
-                        REPORTER,
-                        QUERY_TYPE,
-                        QUERY_ID,
-                        AGGREGATE_METHOD,
-                        CYCLELIST,
-                        POWER,
-                        TIMESTAMP,
-                        TRUSTED_VALUE,
-                        TX_HASH,
-                        CURRENT_TIME,
-                        TIME_DIFF,
-                        VALUE,
-                        DISPUTABLE,
+                        "{get_actual_column('REPORTER')}" as REPORTER,
+                        "{get_actual_column('QUERY_TYPE')}" as QUERY_TYPE,
+                        "{get_actual_column('QUERY_ID')}" as QUERY_ID,
+                        "{get_actual_column('AGGREGATE_METHOD')}" as AGGREGATE_METHOD,
+                        "{get_actual_column('CYCLELIST')}" as CYCLELIST,
+                        "{get_actual_column('POWER')}" as POWER,
+                        "{get_actual_column('TIMESTAMP')}" as TIMESTAMP,
+                        "{get_actual_column('TRUSTED_VALUE')}" as TRUSTED_VALUE,
+                        "{get_actual_column('TX_HASH')}" as TX_HASH,
+                        "{get_actual_column('CURRENT_TIME')}" as CURRENT_TIME,
+                        "{get_actual_column('TIME_DIFF')}" as TIME_DIFF,
+                        "{get_actual_column('VALUE')}" as VALUE,
+                        "{get_actual_column('DISPUTABLE')}" as DISPUTABLE,
                         '{table_info['filename']}' as source_file
                     FROM read_csv_auto('{table_info['path']}', 
                         header=true,
@@ -477,19 +530,19 @@ def load_active_table(table_info, is_reload=False):
                     conn.execute(f"""
                         INSERT OR IGNORE INTO layer_data 
                         SELECT 
-                            CAST(REPORTER AS VARCHAR),
-                            CAST(QUERY_TYPE AS VARCHAR),
-                            CAST(QUERY_ID AS VARCHAR),
-                            CAST(AGGREGATE_METHOD AS VARCHAR),
-                            TRY_CAST(CYCLELIST AS BOOLEAN),
-                            TRY_CAST(POWER AS INTEGER),
-                            TRY_CAST(TIMESTAMP AS BIGINT),
-                            TRY_CAST(TRUSTED_VALUE AS DOUBLE),
-                            CAST(TX_HASH AS VARCHAR),
-                            TRY_CAST(CURRENT_TIME AS BIGINT),
-                            TRY_CAST(TIME_DIFF AS INTEGER),
-                            TRY_CAST(VALUE AS DOUBLE),
-                            TRY_CAST(DISPUTABLE AS BOOLEAN),
+                            CAST("{get_actual_column('REPORTER')}" AS VARCHAR) as REPORTER,
+                            CAST("{get_actual_column('QUERY_TYPE')}" AS VARCHAR) as QUERY_TYPE,
+                            CAST("{get_actual_column('QUERY_ID')}" AS VARCHAR) as QUERY_ID,
+                            CAST("{get_actual_column('AGGREGATE_METHOD')}" AS VARCHAR) as AGGREGATE_METHOD,
+                            TRY_CAST("{get_actual_column('CYCLELIST')}" AS BOOLEAN) as CYCLELIST,
+                            TRY_CAST("{get_actual_column('POWER')}" AS INTEGER) as POWER,
+                            TRY_CAST("{get_actual_column('TIMESTAMP')}" AS BIGINT) as TIMESTAMP,
+                            TRY_CAST("{get_actual_column('TRUSTED_VALUE')}" AS DOUBLE) as TRUSTED_VALUE,
+                            CAST("{get_actual_column('TX_HASH')}" AS VARCHAR) as TX_HASH,
+                            TRY_CAST("{get_actual_column('CURRENT_TIME')}" AS BIGINT) as CURRENT_TIME,
+                            TRY_CAST("{get_actual_column('TIME_DIFF')}" AS INTEGER) as TIME_DIFF,
+                            TRY_CAST("{get_actual_column('VALUE')}" AS DOUBLE) as VALUE,
+                            TRY_CAST("{get_actual_column('DISPUTABLE')}" AS BOOLEAN) as DISPUTABLE,
                             '{table_info['filename']}' as source_file
                         FROM read_csv_auto('{table_info['path']}', 
                             header=true,
@@ -646,12 +699,16 @@ def load_csv_files():
 
 def periodic_reload():
     """Periodically check for updates in the active CSV file or new files"""
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+    
     while True:
         try:
             time.sleep(10)  # Check every 10 seconds
             
             table_files = get_table_files()
             if not table_files:
+                logger.debug("📂 No table files found, continuing...")
                 continue
             
             # Get the most recent table (should be active)
@@ -662,6 +719,7 @@ def periodic_reload():
             if not current_active or newest_table['timestamp'] > current_active['timestamp']:
                 logger.info("📥 Detected new active table, reloading data...")
                 load_csv_files()
+                consecutive_errors = 0  # Reset error count on success
                 continue
             
             # Check if the current active table has grown
@@ -678,11 +736,19 @@ def periodic_reload():
                     data_info["total_rows"] = actual_total
                     data_info["last_updated"] = time.time()
                     logger.info(f"🔄 Reloaded active table, database now has {formatNumber(actual_total)} rows")
+                    consecutive_errors = 0  # Reset error count on success
                 
         except Exception as e:
-            logger.error(f"❌ Error in periodic reload: {e}")
-            import traceback
-            traceback.print_exc()
+            consecutive_errors += 1
+            logger.error(f"❌ Error in periodic reload (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
+            
+            if consecutive_errors >= max_consecutive_errors:
+                logger.error(f"💥 Too many consecutive errors in periodic reload, backing off...")
+                time.sleep(60)  # Wait 60 seconds before trying again
+                consecutive_errors = 0  # Reset counter after backoff
+            else:
+                import traceback
+                traceback.print_exc()
 
 # Revert to the original startup event pattern
 @app.on_event("startup")
@@ -2424,16 +2490,23 @@ async def get_reporters_summary():
     """Get summary statistics about reporters"""
     try:
         with db_lock:
-            # Get basic stats
+            # Get basic stats with proper active_24h calculation
             summary_result = conn.execute("""
                 SELECT 
                     COUNT(*) as total_reporters,
                     COUNT(CASE WHEN jailed = true THEN 1 END) as jailed_reporters,
-                    COUNT(CASE WHEN power > 0 THEN 1 END) as active_reporters,
+                    COUNT(CASE WHEN ld.address IS NOT NULL THEN 1 END) as active_reporters,
                     AVG(power) as avg_power,
                     MAX(power) as max_power,
                     SUM(power) as total_power
-                FROM reporters
+                FROM reporters r
+                LEFT JOIN (
+                    SELECT DISTINCT REPORTER as address
+                    FROM layer_data 
+                    WHERE CURRENT_TIME > (
+                        SELECT MAX(CURRENT_TIME) - 86400000 FROM layer_data
+                    )
+                ) ld ON r.address = ld.address
             """).fetchone()
             
             # Get top reporters by power
