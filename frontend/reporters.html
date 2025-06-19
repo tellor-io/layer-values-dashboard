@@ -19,7 +19,7 @@
                 <div class="analytics-header">
                     <h2>
                         <i class="fas fa-chart-line"></i>
-                        Reporter Activity Over Time
+                        Tellor Reporter Activity
                     </h2>
                     <div class="analytics-controls">
                         <button class="analytics-btn active" data-timeframe="24h">
@@ -460,6 +460,8 @@
                     this.reporterActivityChart.data.labels = data.time_labels;
                     this.reporterActivityChart.data.datasets[0].data = data.total_reports;
                     this.reporterActivityChart.data.datasets[1].data = data.active_reporters;
+                    this.reporterActivityChart.data.datasets[2].data = data.total_power_activity;
+                    this.reporterActivityChart.data.datasets[3].data = data.total_power_of_aggr;
                     this.reporterActivityChart.update('none'); // No animation for faster updates
                     return;
                 }
@@ -487,7 +489,8 @@
                                 pointBorderColor: '#000',
                                 pointBorderWidth: 1,
                                 pointRadius: 4,
-                                pointHoverRadius: 6
+                                pointHoverRadius: 6,
+                                yAxisID: 'y'
                             },
                             {
                                 label: 'Active Reporters',
@@ -501,7 +504,38 @@
                                 pointBorderColor: '#000',
                                 pointBorderWidth: 1,
                                 pointRadius: 4,
-                                pointHoverRadius: 6
+                                pointHoverRadius: 6,
+                                yAxisID: 'y'
+                            },
+                            {
+                                label: 'Power-Weighted Reporting',
+                                data: data.total_power_activity,
+                                borderColor: '#ff6b6b',
+                                backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                                borderWidth: 3,
+                                fill: false,
+                                tension: 0.1,
+                                pointBackgroundColor: '#ff6b6b',
+                                pointBorderColor: '#000',
+                                pointBorderWidth: 1,
+                                pointRadius: 4,
+                                pointHoverRadius: 6,
+                                yAxisID: 'y1'
+                            },
+                            {
+                                label: 'Power of Aggregation',
+                                data: data.total_power_of_aggr,
+                                borderColor: '#ff9500',
+                                backgroundColor: 'rgba(255, 149, 0, 0.1)',
+                                borderWidth: 3,
+                                fill: false,
+                                tension: 0.1,
+                                pointBackgroundColor: '#ff9500',
+                                pointBorderColor: '#000',
+                                pointBorderWidth: 1,
+                                pointRadius: 4,
+                                pointHoverRadius: 6,
+                                yAxisID: 'y2'
                             }
                         ]
                     },
@@ -535,6 +569,11 @@
                                     },
                                     label: function(context) {
                                         const dataset = context.dataset;
+                                        if (dataset.label === 'Power-Weighted Reporting') {
+                                            return `${dataset.label}: ${context.formattedValue} (total power)`;
+                                        } else if (dataset.label === 'Power of Aggregation') {
+                                            return `${dataset.label}: ${context.formattedValue} (total POWER_OF_AGGR)`;
+                                        }
                                         return `${dataset.label}: ${context.formattedValue}`;
                                     }
                                 }
@@ -555,6 +594,9 @@
                                 }
                             },
                             y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
                                 ticks: {
                                     color: '#00d4ff',
                                     beginAtZero: true,
@@ -565,6 +607,48 @@
                                 },
                                 grid: {
                                     color: 'rgba(51, 51, 68, 0.3)'
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Reports / Reporters',
+                                    color: '#00d4ff'
+                                }
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                ticks: {
+                                    color: '#ff6b6b',
+                                    beginAtZero: true,
+                                    font: {
+                                        family: 'Inter',
+                                        size: 11
+                                    }
+                                },
+                                grid: {
+                                    drawOnChartArea: false,
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Total Power',
+                                    color: '#ff6b6b'
+                                }
+                            },
+                            y2: {
+                                type: 'linear',
+                                display: false,
+                                position: 'right',
+                                ticks: {
+                                    color: '#ff9500',
+                                    beginAtZero: true,
+                                    font: {
+                                        family: 'Inter',
+                                        size: 11
+                                    }
+                                },
+                                grid: {
+                                    drawOnChartArea: false,
                                 }
                             }
                         },

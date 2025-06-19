@@ -1,13 +1,12 @@
 import duckdb
 import pandas as pd
 import os
-import glob
 import argparse
 import sys
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 from typing import Optional, List
 import threading
@@ -16,7 +15,7 @@ from pathlib import Path
 import re
 import psutil
 import gc
-import asyncio
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -234,6 +233,74 @@ def get_safe_timestamp_value():
         logger.error(f"❌ Error getting safe timestamp value: {e}")
         return None
 
+def calculate_power_of_aggr(source_file=None):
+    """
+    Calculate and update POWER_OF_AGGR for all rows.
+    POWER_OF_AGGR should be the sum of all POWER values for rows with the same TIMESTAMP.
+    
+    Args:
+        source_file: If provided, only update rows from this source file
+    """
+    try:
+        with db_lock:
+            logger.info("🔄 Calculating POWER_OF_AGGR values...")
+            
+            # Build WHERE clause for source file filtering
+            where_clause = ""
+            params = []
+            if source_file:
+                where_clause = "WHERE source_file = ?"
+                params = [source_file]
+            
+            # Update POWER_OF_AGGR for all rows by calculating the sum of POWER for each TIMESTAMP
+            update_query = f"""
+                UPDATE layer_data 
+                SET POWER_OF_AGGR = (
+                    SELECT SUM(POWER) 
+                    FROM layer_data ld2 
+                    WHERE ld2.TIMESTAMP = layer_data.TIMESTAMP
+                )
+                {where_clause}
+            """
+            
+            result = conn.execute(update_query, params)
+            affected_rows = result.rowcount if hasattr(result, 'rowcount') else 0
+            
+            # Get some statistics about the calculation
+            if source_file:
+                stats_query = """
+                    SELECT 
+                        COUNT(DISTINCT TIMESTAMP) as unique_timestamps,
+                        COUNT(*) as total_rows,
+                        MIN(POWER_OF_AGGR) as min_power_of_aggr,
+                        MAX(POWER_OF_AGGR) as max_power_of_aggr
+                    FROM layer_data 
+                    WHERE source_file = ? AND POWER_OF_AGGR IS NOT NULL
+                """
+                stats = conn.execute(stats_query, [source_file]).fetchone()
+            else:
+                stats_query = """
+                    SELECT 
+                        COUNT(DISTINCT TIMESTAMP) as unique_timestamps,
+                        COUNT(*) as total_rows,
+                        MIN(POWER_OF_AGGR) as min_power_of_aggr,
+                        MAX(POWER_OF_AGGR) as max_power_of_aggr
+                    FROM layer_data 
+                    WHERE POWER_OF_AGGR IS NOT NULL
+                """
+                stats = conn.execute(stats_query).fetchone()
+            
+            if stats:
+                logger.info(f"✅ POWER_OF_AGGR calculation complete:")
+                logger.info(f"   - Unique timestamps: {safe_get(stats, 0, 0)}")
+                logger.info(f"   - Total rows updated: {safe_get(stats, 1, 0)}")
+                logger.info(f"   - POWER_OF_AGGR range: {safe_get(stats, 2, 0)} - {safe_get(stats, 3, 0)}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error calculating POWER_OF_AGGR: {e}")
+        import traceback
+        traceback.print_exc()
+
 # Data storage
 data_info = {
     "tables": [],
@@ -341,6 +408,7 @@ def load_historical_table(table_info):
                     return 'NULL'
                 
                 # Load data directly with proper error handling and column mapping
+                # Note: POWER_OF_AGGR will be calculated after loading, not from CSV
                 conn.execute(f"""
                     INSERT OR IGNORE INTO layer_data 
                     SELECT 
@@ -357,7 +425,8 @@ def load_historical_table(table_info):
                         {map_column('TIME_DIFF')} as TIME_DIFF,
                         {map_column('VALUE')} as VALUE,
                         {map_column('DISPUTABLE')} as DISPUTABLE,
-                        '{table_info['filename']}' as source_file
+                        '{table_info['filename']}' as source_file,
+                        NULL as POWER_OF_AGGR
                     FROM read_csv_auto('{table_info['path']}', 
                         header=true,
                         sample_size=10000,
@@ -371,6 +440,9 @@ def load_historical_table(table_info):
                 """, [table_info['filename']]).fetchone())
                 
                 logger.info(f"✅ Successfully inserted {total_rows} rows from {table_info['filename']}")
+                
+                # Calculate POWER_OF_AGGR for the newly loaded data
+                calculate_power_of_aggr(table_info['filename'])
                 
             except Exception as db_error:
                 logger.error(f"❌ Database error loading {table_info['filename']}: {db_error}")
@@ -394,7 +466,8 @@ def load_historical_table(table_info):
                             TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
                             TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
                             TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
-                            '{table_info['filename']}' as source_file
+                            '{table_info['filename']}' as source_file,
+                            NULL as POWER_OF_AGGR
                         FROM read_csv_auto('{table_info['path']}', 
                             header=true,
                             all_varchar=true,
@@ -408,6 +481,9 @@ def load_historical_table(table_info):
                     """, [table_info['filename']]).fetchone())
                     
                     logger.info(f"✅ Fallback successful: inserted {total_rows} rows from {table_info['filename']}")
+                    
+                    # Calculate POWER_OF_AGGR for the newly loaded data
+                    calculate_power_of_aggr(table_info['filename'])
                     
                 except Exception as fallback_error:
                     logger.error(f"❌ Fallback also failed: {fallback_error}")
@@ -534,7 +610,8 @@ def load_active_table(table_info, is_reload=False):
                         {map_column('TIME_DIFF')} as TIME_DIFF,
                         {map_column('VALUE')} as VALUE,
                         {map_column('DISPUTABLE')} as DISPUTABLE,
-                        '{table_info['filename']}' as source_file
+                        '{table_info['filename']}' as source_file,
+                        NULL as POWER_OF_AGGR
                     FROM read_csv_auto('{table_info['path']}', 
                         header=true,
                         sample_size=10000,
@@ -548,6 +625,9 @@ def load_active_table(table_info, is_reload=False):
                 """, [table_info['filename']]).fetchone())
                 
                 logger.info(f"✅ Successfully inserted {total_rows} rows from {table_info['filename']}")
+                
+                # Calculate POWER_OF_AGGR for the newly loaded data
+                calculate_power_of_aggr(table_info['filename'])
                 
             except Exception as db_error:
                 logger.error(f"❌ Database error loading {table_info['filename']}: {db_error}")
@@ -571,7 +651,8 @@ def load_active_table(table_info, is_reload=False):
                             TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
                             TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
                             TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
-                            '{table_info['filename']}' as source_file
+                            '{table_info['filename']}' as source_file,
+                            NULL as POWER_OF_AGGR
                         FROM read_csv_auto('{table_info['path']}', 
                             header=true,
                             all_varchar=true,
@@ -585,6 +666,9 @@ def load_active_table(table_info, is_reload=False):
                     """, [table_info['filename']]).fetchone())
                     
                     logger.info(f"✅ Fallback successful: inserted {total_rows} rows from {table_info['filename']}")
+                    
+                    # Calculate POWER_OF_AGGR for the newly loaded data
+                    calculate_power_of_aggr(table_info['filename'])
                     
                 except Exception as fallback_error:
                     logger.error(f"❌ Fallback also failed: {fallback_error}")
@@ -640,7 +724,8 @@ def load_csv_files():
                     TIME_DIFF INTEGER,
                     VALUE DOUBLE,
                     DISPUTABLE BOOLEAN,
-                    source_file VARCHAR
+                    source_file VARCHAR,
+                    POWER_OF_AGGR BIGINT
                 )
             """)
             
@@ -786,6 +871,11 @@ async def startup_event():
     logger.info("🚀 Starting Layer Values Dashboard")
     # Load data on startup
     load_csv_files()
+    
+    # Recalculate POWER_OF_AGGR for all existing data to ensure consistency
+    logger.info("🔄 Recalculating POWER_OF_AGGR for all existing data...")
+    calculate_power_of_aggr()
+    
     # Start periodic reload thread
     reload_thread = threading.Thread(target=periodic_reload, daemon=True)
     reload_thread.start()
@@ -1669,7 +1759,7 @@ async def get_reporter_analytics(
 ):
     """Get analytics data by reporter for different timeframes"""
     try:
-        logger.info(f"�� Reporter analytics request: timeframe={timeframe}")
+        logger.info(f"🔄 Reporter analytics request: timeframe={timeframe}")
         current_time_ms = int(time.time() * 1000)
         
         # Add memory usage logging
@@ -2114,10 +2204,10 @@ async def get_agreement_analytics(
             
             logger.info(f"📈 Querying agreement data from {start_time} to {current_time_ms}")
             
-            # Get top query IDs in the timeframe
             # Get safe timestamp filter for consistency
             safe_filter, safe_params = get_safe_timestamp_filter()
             
+            # Get top query IDs in the timeframe
             top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
@@ -2445,26 +2535,30 @@ async def get_reporters_activity_analytics(
             # Get safe timestamp filter for consistency
             safe_filter, safe_params = get_safe_timestamp_filter()
             
-            # Get bucketed data for total reports by active reporters using more efficient approach
+            # Get bucketed data for total reports by active reporters with power-weighted metrics
             results = conn.execute(f"""
                 WITH RECURSIVE bucket_series AS (
                     SELECT 0 as bucket_id
                     UNION ALL
                     SELECT bucket_id + 1 FROM bucket_series WHERE bucket_id < ? - 1
                 ),
-                                 time_buckets AS (
-                     SELECT 
-                         FLOOR((TIMESTAMP - ?) / ?) as bucket_id,
-                         COUNT(DISTINCT REPORTER) as active_reporters,
-                         COUNT(*) as total_reports
-                     FROM layer_data 
-                     WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
-                     GROUP BY bucket_id
-                 )
+                time_buckets AS (
+                    SELECT 
+                        FLOOR((TIMESTAMP - ?) / ?) as bucket_id,
+                        COUNT(DISTINCT REPORTER) as active_reporters,
+                        COUNT(*) as total_reports,
+                        SUM(POWER) as total_power_activity,
+                        SUM(COALESCE(POWER_OF_AGGR, 0)) as total_power_of_aggr
+                    FROM layer_data 
+                    WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
+                    GROUP BY bucket_id
+                )
                 SELECT 
                     bs.bucket_id,
                     COALESCE(tb.active_reporters, 0) as active_reporters,
-                    COALESCE(tb.total_reports, 0) as total_reports
+                    COALESCE(tb.total_reports, 0) as total_reports,
+                    COALESCE(tb.total_power_activity, 0) as total_power_activity,
+                    COALESCE(tb.total_power_of_aggr, 0) as total_power_of_aggr
                 FROM bucket_series bs
                 LEFT JOIN time_buckets tb ON bs.bucket_id = tb.bucket_id
                 ORDER BY bs.bucket_id
@@ -2473,6 +2567,8 @@ async def get_reporters_activity_analytics(
             # Create arrays efficiently using list comprehension
             total_reports_data = [row[2] for row in results]
             active_reporters_data = [row[1] for row in results]
+            total_power_activity_data = [row[3] for row in results]
+            total_power_of_aggr_data = [row[4] for row in results]
             
             # Generate time labels efficiently
             time_labels = []
@@ -2495,7 +2591,9 @@ async def get_reporters_activity_analytics(
                 "title": f"Reporter Activity (Past {timeframe})",
                 "time_labels": time_labels,
                 "total_reports": total_reports_data,
-                "active_reporters": active_reporters_data
+                "active_reporters": active_reporters_data,
+                "total_power_activity": total_power_activity_data,
+                "total_power_of_aggr": total_power_of_aggr_data
             }
             
             # Return with cache headers
