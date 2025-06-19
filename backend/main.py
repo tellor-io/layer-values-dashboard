@@ -519,187 +519,280 @@ def load_historical_table(table_info):
 
 def load_active_table(table_info, is_reload=False):
     """Load or reload the active table"""
-    try:
-        # Add memory monitoring
-        process = psutil.Process()
-        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-        
-        if is_reload:
-            logger.info(f"💾 Reloading active table: {table_info['filename']} ({table_info['size'] / 1024 / 1024:.1f} MB)")
-            logger.info(f"📊 Initial memory: {initial_memory:.1f} MB")
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            # Add memory monitoring
+            process = psutil.Process()
+            initial_memory = process.memory_info().rss / 1024 / 1024  # MB
             
-            # Remove existing data for this file with thread safety
-            with db_lock:
-                logger.info(f"🗑️  Removing existing data for {table_info['filename']}")
-                conn.execute("DELETE FROM layer_data WHERE source_file = ?", [table_info['filename']])
-        else:
-            logger.info(f"💾 Loading active table: {table_info['filename']} ({table_info['size'] / 1024 / 1024:.1f} MB)")
-            logger.info(f"📊 Initial memory: {initial_memory:.1f} MB")
-        
-        # Check if file exists and is readable
-        if not table_info['path'].exists():
-            logger.error(f"❌ Error: File {table_info['path']} does not exist")
-            return None
-            
-        # For very large files, add a warning but still try to load (active table is important)
-        if table_info['size'] > 1024 * 1024 * 1024:  # 1GB warning
-            logger.warning(f"⚠️  Very large active table detected ({table_info['size'] / 1024 / 1024:.1f} MB), loading carefully...")
-        
-        # Use thread-safe database access
-        with db_lock:
-            logger.info(f"📖 Reading CSV file: {table_info['path']}")
-            
-            try:
-                # First, inspect the CSV to understand its structure
-                logger.info("🔍 Inspecting CSV structure...")
-                csv_info = conn.execute(f"""
-                    SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
-                    LIMIT 3
-                """).fetchall()
+            if is_reload:
+                logger.info(f"💾 Reloading active table: {table_info['filename']} ({table_info['size'] / 1024 / 1024:.1f} MB) - Attempt {attempt + 1}/{max_retries}")
+                logger.info(f"📊 Initial memory: {initial_memory:.1f} MB")
                 
-                if not csv_info:
-                    logger.error(f"❌ CSV file appears to be empty: {table_info['filename']}")
+                # Remove existing data for this file with thread safety
+                with db_lock:
+                    logger.info(f"🗑️  Removing existing data for {table_info['filename']}")
+                    conn.execute("DELETE FROM layer_data WHERE source_file = ?", [table_info['filename']])
+            else:
+                logger.info(f"💾 Loading active table: {table_info['filename']} ({table_info['size'] / 1024 / 1024:.1f} MB)")
+                logger.info(f"📊 Initial memory: {initial_memory:.1f} MB")
+            
+            # Check if file exists and is readable
+            if not table_info['path'].exists():
+                logger.error(f"❌ Error: File {table_info['path']} does not exist")
+                return None
+            
+            # Add file size validation to detect race conditions
+            current_size = table_info['path'].stat().st_size
+            if current_size == 0:
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️  File appears empty (size: {current_size}), retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    logger.error(f"❌ File remains empty after {max_retries} attempts: {table_info['filename']}")
                     return None
+            
+            # Check if file size has changed significantly since detection (another race condition indicator)
+            size_diff = abs(current_size - table_info['size'])
+            size_change_threshold = table_info['size'] * 0.1  # 10% change threshold
+            if size_diff > size_change_threshold:
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️  File size changed significantly during reload (expected: {table_info['size']}, current: {current_size}), retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                    # Update table_info with new size for next attempt
+                    table_info['size'] = current_size
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    logger.warning(f"⚠️  File size still changing after {max_retries} attempts, proceeding with current size: {current_size}")
+                    table_info['size'] = current_size
+            
+            # For very large files, add a warning but still try to load (active table is important)
+            if table_info['size'] > 1024 * 1024 * 1024:  # 1GB warning
+                logger.warning(f"⚠️  Very large active table detected ({table_info['size'] / 1024 / 1024:.1f} MB), loading carefully...")
+            
+            # Use thread-safe database access
+            with db_lock:
+                logger.info(f"📖 Reading CSV file: {table_info['path']}")
                 
-                # Get column information
-                csv_columns = conn.execute(f"""
-                    DESCRIBE SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
-                """).fetchall()
-                
-                logger.info(f"📋 Found {len(csv_columns)} columns in CSV:")
-                actual_columns = {}
-                for col in csv_columns:
-                    col_name = col[0]
-                    col_type = col[1]
-                    # Handle URL-encoded column names
-                    clean_name = col_name.replace('+AF8-', '_').replace('%5F', '_')
-                    actual_columns[clean_name] = col_name
-                    logger.info(f"   - {col_name} ({clean_name}): {col_type}")
-                
-                # Build the SELECT statement with actual column names
-                def map_column(expected_name):
-                    """Return a quoted column name if present, otherwise SQL NULL.
-                    This prevents errors when the CSV is missing optional columns."""
-                    if expected_name in actual_columns:
-                        return f'"{actual_columns[expected_name]}"'
-
-                    # Try common variations (URL-encoded or case variations)
-                    for actual_name in actual_columns.values():
-                        if actual_name.replace('+AF8-', '_').replace('%5F', '_') == expected_name:
-                            return f'"{actual_name}"'
-
-                    # Column truly not present – use SQL NULL literal instead of a missing identifier
-                    logger.debug(f"🕳️  Column '{expected_name}' not found in CSV. Inserting NULL for it.")
-                    return 'NULL'
-                
-                logger.info("📥 Loading CSV data into database...")
-                # Load data directly with proper error handling and column mapping
-                conn.execute(f"""
-                    INSERT OR IGNORE INTO layer_data 
-                    SELECT 
-                        {map_column('REPORTER')} as REPORTER,
-                        {map_column('QUERY_TYPE')} as QUERY_TYPE,
-                        {map_column('QUERY_ID')} as QUERY_ID,
-                        {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
-                        {map_column('CYCLELIST')} as CYCLELIST,
-                        {map_column('POWER')} as POWER,
-                        {map_column('TIMESTAMP')} as TIMESTAMP,
-                        {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
-                        {map_column('TX_HASH')} as TX_HASH,
-                        {map_column('CURRENT_TIME')} as CURRENT_TIME,
-                        {map_column('TIME_DIFF')} as TIME_DIFF,
-                        {map_column('VALUE')} as VALUE,
-                        {map_column('DISPUTABLE')} as DISPUTABLE,
-                        '{table_info['filename']}' as source_file,
-                        NULL as POWER_OF_AGGR
-                    FROM read_csv_auto('{table_info['path']}', 
-                        header=true,
-                        sample_size=10000,
-                        ignore_errors=true
-                    )
-                """)
-                
-                # Get the count of rows actually inserted
-                total_rows = safe_get(conn.execute("""
-                    SELECT COUNT(*) FROM layer_data WHERE source_file = ?
-                """, [table_info['filename']]).fetchone())
-                
-                logger.info(f"✅ Successfully inserted {total_rows} rows from {table_info['filename']}")
-                
-                # Calculate POWER_OF_AGGR for the newly loaded data
-                calculate_power_of_aggr(table_info['filename'])
-                
-            except Exception as db_error:
-                logger.error(f"❌ Database error loading {table_info['filename']}: {db_error}")
-                
-                # Try a more permissive approach
                 try:
-                    logger.info("🔄 Trying fallback approach with all_varchar...")
+                    # First, inspect the CSV to understand its structure
+                    logger.info("🔍 Inspecting CSV structure...")
+                    csv_info = conn.execute(f"""
+                        SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
+                        LIMIT 3
+                    """).fetchall()
+                    
+                    if not csv_info:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"⚠️  CSV file appears to be empty during read: {table_info['filename']}, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error(f"❌ CSV file appears to be empty after {max_retries} attempts: {table_info['filename']}")
+                            return None
+                    
+                    # Get column information
+                    csv_columns = conn.execute(f"""
+                        DESCRIBE SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
+                    """).fetchall()
+                    
+                    logger.info(f"📋 Found {len(csv_columns)} columns in CSV:")
+                    actual_columns = {}
+                    for col in csv_columns:
+                        col_name = col[0]
+                        col_type = col[1]
+                        # Handle URL-encoded column names
+                        clean_name = col_name.replace('+AF8-', '_').replace('%5F', '_')
+                        actual_columns[clean_name] = col_name
+                        logger.info(f"   - {col_name} ({clean_name}): {col_type}")
+                    
+                    # Build the SELECT statement with actual column names
+                    def map_column(expected_name):
+                        """Return a quoted column name if present, otherwise SQL NULL.
+                        This prevents errors when the CSV is missing optional columns."""
+                        if expected_name in actual_columns:
+                            return f'"{actual_columns[expected_name]}"'
+
+                        # Try common variations (URL-encoded or case variations)
+                        for actual_name in actual_columns.values():
+                            if actual_name.replace('+AF8-', '_').replace('%5F', '_') == expected_name:
+                                return f'"{actual_name}"'
+
+                        # Column truly not present – use SQL NULL literal instead of a missing identifier
+                        logger.debug(f"🕳️  Column '{expected_name}' not found in CSV. Inserting NULL for it.")
+                        return 'NULL'
+                    
+                    logger.info("📥 Loading CSV data into database...")
+                    # Load data directly with proper error handling and column mapping
                     conn.execute(f"""
                         INSERT OR IGNORE INTO layer_data 
                         SELECT 
-                            CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
-                            CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
-                            CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
-                            CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
-                            TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
-                            TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
-                            TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
-                            TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
-                            CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
-                            TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
-                            TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
-                            TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
-                            TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
+                            {map_column('REPORTER')} as REPORTER,
+                            {map_column('QUERY_TYPE')} as QUERY_TYPE,
+                            {map_column('QUERY_ID')} as QUERY_ID,
+                            {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
+                            {map_column('CYCLELIST')} as CYCLELIST,
+                            {map_column('POWER')} as POWER,
+                            {map_column('TIMESTAMP')} as TIMESTAMP,
+                            {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
+                            {map_column('TX_HASH')} as TX_HASH,
+                            {map_column('CURRENT_TIME')} as CURRENT_TIME,
+                            {map_column('TIME_DIFF')} as TIME_DIFF,
+                            {map_column('VALUE')} as VALUE,
+                            {map_column('DISPUTABLE')} as DISPUTABLE,
                             '{table_info['filename']}' as source_file,
                             NULL as POWER_OF_AGGR
                         FROM read_csv_auto('{table_info['path']}', 
                             header=true,
-                            all_varchar=true,
                             sample_size=10000,
                             ignore_errors=true
                         )
                     """)
                     
+                    # Get the count of rows actually inserted
                     total_rows = safe_get(conn.execute("""
                         SELECT COUNT(*) FROM layer_data WHERE source_file = ?
                     """, [table_info['filename']]).fetchone())
                     
-                    logger.info(f"✅ Fallback successful: inserted {total_rows} rows from {table_info['filename']}")
+                    # Validate that we actually loaded some data
+                    if total_rows == 0:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"⚠️  No rows loaded from CSV file: {table_info['filename']}, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error(f"❌ No rows loaded from CSV file after {max_retries} attempts: {table_info['filename']}")
+                            return None
+                    
+                    logger.info(f"✅ Successfully inserted {total_rows} rows from {table_info['filename']}")
                     
                     # Calculate POWER_OF_AGGR for the newly loaded data
                     calculate_power_of_aggr(table_info['filename'])
                     
-                except Exception as fallback_error:
-                    logger.error(f"❌ Fallback also failed: {fallback_error}")
-                    return None
-        
-        logger.info(f"✅ Read {total_rows} rows from {table_info['filename']}")
-        
-        data_info["active_table"] = table_info
-        data_info["active_table_last_size"] = table_info['size']
-        
-        # Force garbage collection
-        gc.collect()
-        
-        # Final memory check
-        final_memory = process.memory_info().rss / 1024 / 1024  # MB
-        logger.info(f"✅ Successfully loaded {table_info['filename']} with {total_rows} rows")
-        logger.info(f"📊 Final memory: {final_memory:.1f} MB (total delta: +{final_memory - initial_memory:.1f} MB)")
-        
-        return {
-            "filename": table_info['filename'],
-            "rows": total_rows,
-            "size_mb": round(table_info['size'] / 1024 / 1024, 2),
-            "timestamp": table_info['timestamp'],
-            "type": "active"
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error loading active table {table_info['filename']}: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+                    # Success! Break out of retry loop
+                    break
+                    
+                except Exception as db_error:
+                    logger.error(f"❌ Database error loading {table_info['filename']}: {db_error}")
+                    
+                    # Try a more permissive approach
+                    try:
+                        logger.info("🔄 Trying fallback approach with all_varchar...")
+                        conn.execute(f"""
+                            INSERT OR IGNORE INTO layer_data 
+                            SELECT 
+                                CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
+                                CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
+                                CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
+                                CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
+                                TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
+                                TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
+                                TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
+                                TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
+                                CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
+                                TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
+                                TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
+                                TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
+                                TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
+                                '{table_info['filename']}' as source_file,
+                                NULL as POWER_OF_AGGR
+                            FROM read_csv_auto('{table_info['path']}', 
+                                header=true,
+                                all_varchar=true,
+                                sample_size=10000,
+                                ignore_errors=true
+                            )
+                        """)
+                        
+                        total_rows = safe_get(conn.execute("""
+                            SELECT COUNT(*) FROM layer_data WHERE source_file = ?
+                        """, [table_info['filename']]).fetchone())
+                        
+                        if total_rows == 0:
+                            if attempt < max_retries - 1:
+                                logger.warning(f"⚠️  Fallback approach also loaded no rows: {table_info['filename']}, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                                time.sleep(retry_delay)
+                                continue
+                            else:
+                                logger.error(f"❌ Fallback approach also loaded no rows after {max_retries} attempts: {table_info['filename']}")
+                                return None
+                        
+                        logger.info(f"✅ Fallback successful: inserted {total_rows} rows from {table_info['filename']}")
+                        
+                        # Calculate POWER_OF_AGGR for the newly loaded data
+                        calculate_power_of_aggr(table_info['filename'])
+                        
+                        # Success! Break out of retry loop
+                        break
+                        
+                    except Exception as fallback_error:
+                        if attempt < max_retries - 1:
+                            logger.error(f"❌ Fallback also failed (attempt {attempt + 1}/{max_retries}): {fallback_error}")
+                            logger.info(f"⏳ Retrying in {retry_delay} seconds...")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error(f"❌ All approaches failed after {max_retries} attempts: {fallback_error}")
+                            return None
+            
+            logger.info(f"✅ Read {total_rows} rows from {table_info['filename']}")
+            
+            data_info["active_table"] = table_info
+            data_info["active_table_last_size"] = table_info['size']
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Final memory check
+            final_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.info(f"✅ Successfully loaded {table_info['filename']} with {total_rows} rows")
+            logger.info(f"📊 Final memory: {final_memory:.1f} MB (total delta: +{final_memory - initial_memory:.1f} MB)")
+            
+            return {
+                "filename": table_info['filename'],
+                "rows": total_rows,
+                "size_mb": round(table_info['size'] / 1024 / 1024, 2),
+                "timestamp": table_info['timestamp'],
+                "type": "active"
+            }
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.error(f"❌ Error loading active table {table_info['filename']} (attempt {attempt + 1}/{max_retries}): {e}")
+                logger.info(f"⏳ Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                logger.error(f"❌ Error loading active table {table_info['filename']} after {max_retries} attempts: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+    
+    # If we get here, the retry loop completed successfully
+    logger.info(f"✅ Read {total_rows} rows from {table_info['filename']}")
+    
+    data_info["active_table"] = table_info
+    data_info["active_table_last_size"] = table_info['size']
+    
+    # Force garbage collection
+    gc.collect()
+    
+    # Final memory check
+    final_memory = process.memory_info().rss / 1024 / 1024  # MB
+    logger.info(f"✅ Successfully loaded {table_info['filename']} with {total_rows} rows")
+    logger.info(f"📊 Final memory: {final_memory:.1f} MB (total delta: +{final_memory - initial_memory:.1f} MB)")
+    
+    return {
+        "filename": table_info['filename'],
+        "rows": total_rows,
+        "size_mb": round(table_info['size'] / 1024 / 1024, 2),
+        "timestamp": table_info['timestamp'],
+        "type": "active"
+    }
 
 def load_csv_files():
     """Load CSV files with smart handling of historical vs active tables"""
@@ -840,16 +933,28 @@ def periodic_reload():
                 newest_table['filename'] == current_active['filename'] and
                 newest_table['size'] != data_info["active_table_last_size"]):
                 
-                logger.info(f"📈 Active table {newest_table['filename']} has grown, reloading...")
-                result = load_active_table(newest_table, is_reload=True)
-                if result:
-                    # Update total count with thread safety
-                    with db_lock:
-                        actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
-                    data_info["total_rows"] = actual_total
-                    data_info["last_updated"] = time.time()
-                    logger.info(f"🔄 Reloaded active table, database now has {formatNumber(actual_total)} rows")
-                    consecutive_errors = 0  # Reset error count on success
+                # Add additional validation before attempting reload
+                size_change = newest_table['size'] - data_info["active_table_last_size"]
+                min_change_threshold = 1024  # Only reload if file grew by at least 1KB
+                
+                if size_change >= min_change_threshold:
+                    logger.info(f"📈 Active table {newest_table['filename']} has grown by {size_change} bytes, reloading...")
+                    result = load_active_table(newest_table, is_reload=True)
+                    if result:
+                        # Update total count with thread safety
+                        with db_lock:
+                            actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+                        data_info["total_rows"] = actual_total
+                        data_info["last_updated"] = time.time()
+                        logger.info(f"🔄 Reloaded active table, database now has {formatNumber(actual_total)} rows")
+                        consecutive_errors = 0  # Reset error count on success
+                    else:
+                        logger.warning(f"⚠️  Failed to reload active table {newest_table['filename']}, will retry on next check")
+                        # Don't count this as an error since load_active_table already has retry logic
+                else:
+                    logger.debug(f"📝 Active table size change too small ({size_change} bytes), skipping reload")
+                    # Update the size anyway to prevent constant small change detection
+                    data_info["active_table_last_size"] = newest_table['size']
                 
         except Exception as e:
             consecutive_errors += 1
