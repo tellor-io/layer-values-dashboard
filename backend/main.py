@@ -51,9 +51,17 @@ def formatNumber(num):
         return "0"
     return f"{num:,}"
 
-def safe_get(row, index=0, default=0):
-    """Safely get value from row, returning default if None"""
-    return row[index] if row else default
+def safe_get(row, index=0, default=None):
+    """Safely get value from row, returning default if None or index error"""
+    try:
+        if row is None:
+            return default if default is not None else 0
+        if hasattr(row, '__len__') and len(row) > index:
+            value = row[index]
+            return value if value is not None else (default if default is not None else 0)
+        return default if default is not None else 0
+    except (IndexError, TypeError):
+        return default if default is not None else 0
 
 # Alternative approach: Use this pattern instead of .fetchone()[0]
 # result = conn.execute("...").fetchone()
@@ -954,7 +962,8 @@ async def get_data(
         with db_lock:
             try:
                 # First check if we have any data at all
-                total_in_db = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+                total_in_db_result = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()
+                total_in_db = safe_get(total_in_db_result)
                 logger.info(f"🔍 Debug: Total rows in database: {total_in_db}")
                 
                 if total_in_db == 0:
@@ -973,7 +982,8 @@ async def get_data(
                     FROM layer_data 
                     WHERE {where_clause}
                 """
-                total = safe_get(conn.execute(count_query, list(params.values())).fetchone())
+                total_result = conn.execute(count_query, all_params).fetchone()
+                total = safe_get(total_result)
                 logger.info(f"🔍 Debug: Filtered total: {total}")
                 
                 # Calculate actual limit and offset
@@ -1091,7 +1101,7 @@ async def get_stats():
             
             # Average agreement calculation - simplified and more robust
             # Calculate agreement percentage for all records where both values exist
-            average_agreement_result = safe_get(conn.execute("""
+            average_agreement_result = conn.execute("""
                 SELECT 
                     AVG(CASE 
                         WHEN VALUE = TRUSTED_VALUE THEN 100.0
@@ -1103,21 +1113,21 @@ async def get_stats():
                 WHERE VALUE IS NOT NULL 
                 AND TRUSTED_VALUE IS NOT NULL 
                 AND TRUSTED_VALUE != 0
-            """).fetchone())
+            """).fetchone()
             
-            if average_agreement_result and average_agreement_result[0] is not None:
-                stats["average_agreement"] = round(average_agreement_result[0], 2)
+            if average_agreement_result and len(average_agreement_result) > 0 and average_agreement_result[0] is not None:
+                stats["average_agreement"] = round(float(average_agreement_result[0]), 2)
             else:
                 stats["average_agreement"] = None
             
             # Value statistics
-            value_stats = safe_get(conn.execute("""
+            value_stats = conn.execute("""
                 SELECT 
                     MIN(VALUE) as min_value,
                     MAX(VALUE) as max_value,
                     MEDIAN(VALUE) as median_value
                 FROM layer_data
-            """).fetchone())
+            """).fetchone()
             
             stats["value_stats"] = {
                 "min": safe_get(value_stats, 0, 0),
@@ -1152,12 +1162,12 @@ async def get_stats():
                 stats["recent_reporter_count"] = 0
             
             # Recent activity (last hour)
-            recent_count = safe_get(conn.execute("""
+            recent_count = conn.execute("""
                 SELECT COUNT(*) FROM layer_data 
                 WHERE CURRENT_TIME > (SELECT MAX(CURRENT_TIME) - 3600000 FROM layer_data)
-            """).fetchone())
+            """).fetchone()
             
-            stats["recent_activity"] = recent_count
+            stats["recent_activity"] = safe_get(recent_count)
             
             # Questionable values calculation
             # Get current time in milliseconds (since TIMESTAMP appears to be in milliseconds)
@@ -1166,14 +1176,14 @@ async def get_stats():
             hours_48_ms = 48 * 60 * 60 * 1000  # 48 hours in milliseconds
             
             # Count questionable values (DISPUTABLE = true AND within 72 hours)
-            questionable_stats = safe_get(conn.execute("""
+            questionable_stats = conn.execute("""
                 SELECT 
                     COUNT(*) as total_questionable,
                     COUNT(CASE WHEN (? - TIMESTAMP) < ? THEN 1 END) as urgent_questionable
                 FROM layer_data 
                 WHERE DISPUTABLE = true 
                 AND (? - TIMESTAMP) < ?
-            """, [current_time_ms, hours_48_ms, current_time_ms, hours_72_ms]).fetchone())
+            """, [current_time_ms, hours_48_ms, current_time_ms, hours_72_ms]).fetchone()
             
             stats["questionable_values"] = {
                 "total": safe_get(questionable_stats, 0, 0),
@@ -1182,34 +1192,34 @@ async def get_stats():
             }
             
             # Top reporters
-            top_reporters = safe_get(conn.execute("""
+            top_reporters = conn.execute("""
                 SELECT REPORTER, COUNT(*) as count 
                 FROM layer_data 
                 GROUP BY REPORTER 
                 ORDER BY count DESC 
                 LIMIT 50
-            """).df().to_dict(orient="records"))
+            """).df().to_dict(orient="records")
             
             stats["top_reporters"] = top_reporters
             
             # Top query IDs
-            top_query_ids = safe_get(conn.execute("""
+            top_query_ids = conn.execute("""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
                 LIMIT 50
-            """).df().to_dict(orient="records"))
+            """).df().to_dict(orient="records")
             
             stats["top_query_ids"] = top_query_ids
             
             # Query type distribution
-            query_types = safe_get(conn.execute("""
+            query_types = conn.execute("""
                 SELECT QUERY_TYPE, COUNT(*) as count 
                 FROM layer_data 
                 GROUP BY QUERY_TYPE 
                 ORDER BY count DESC
-            """).df().to_dict(orient="records"))
+            """).df().to_dict(orient="records")
             
             stats["query_types"] = query_types
         
@@ -1226,12 +1236,12 @@ async def get_stats():
 
 @dashboard_app.get("/api/analytics")
 async def get_analytics(
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$"),
-    request: Request = None
+    request: Request,
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get analytics data with cellular optimization"""
     try:
-        user_agent = request.headers.get("user-agent", "") if request else ""
+        user_agent = request.headers.get("user-agent", "")
         is_mobile = any(mobile in user_agent.lower() for mobile in ["mobile", "android", "iphone", "ipad"])
         is_cellular = any(carrier in user_agent.lower() for carrier in [
             "verizon", "att", "t-mobile", "sprint", "vodafone", "orange"
@@ -2388,16 +2398,15 @@ async def get_reporter_detail(address: str):
 
 @dashboard_app.get("/api/reporters-activity-analytics")
 async def get_reporters_activity_analytics(
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$"),
-    request: Request = None
+    request: Request,
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get total reports by active reporters analytics data for different timeframes"""
     try:
         # Add cache headers for performance
-        if request:
-            # Cache for 60 seconds for this analytics data
-            cache_seconds = 60
-            optimization_note = ""
+        # Cache for 60 seconds for this analytics data
+        cache_seconds = 60
+        optimization_note = ""
         
         # Add memory monitoring for performance tracking
         process = psutil.Process()
@@ -2491,9 +2500,8 @@ async def get_reporters_activity_analytics(
             
             # Return with cache headers
             response = JSONResponse(content=response_data)
-            if request:
-                response.headers["Cache-Control"] = f"public, max-age={cache_seconds}"
-                response.headers["X-Optimization"] = "Efficient SQL with bucket series"
+            response.headers["Cache-Control"] = f"public, max-age={cache_seconds}"
+            response.headers["X-Optimization"] = "Efficient SQL with bucket series"
             
             return response
             
