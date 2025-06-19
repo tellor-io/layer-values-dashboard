@@ -317,32 +317,38 @@ def load_historical_table(table_info):
                     logger.info(f"   - {col_name} ({clean_name}): {col_type}")
                 
                 # Build the SELECT statement with actual column names
-                def get_actual_column(expected_name):
+                def map_column(expected_name):
+                    """Return a quoted column name if present, otherwise SQL NULL.
+                    This prevents errors when the CSV is missing optional columns."""
                     if expected_name in actual_columns:
-                        return actual_columns[expected_name]
-                    # Try common variations
+                        return f'"{actual_columns[expected_name]}"'
+
+                    # Try common variations (URL-encoded or case variations)
                     for actual_name in actual_columns.values():
                         if actual_name.replace('+AF8-', '_').replace('%5F', '_') == expected_name:
-                            return actual_name
-                    return expected_name  # fallback
+                            return f'"{actual_name}"'
+
+                    # Column truly not present – use SQL NULL literal instead of a missing identifier
+                    logger.debug(f"🕳️  Column '{expected_name}' not found in CSV. Inserting NULL for it.")
+                    return 'NULL'
                 
                 # Load data directly with proper error handling and column mapping
                 conn.execute(f"""
                     INSERT OR IGNORE INTO layer_data 
                     SELECT 
-                        "{get_actual_column('REPORTER')}" as REPORTER,
-                        "{get_actual_column('QUERY_TYPE')}" as QUERY_TYPE,
-                        "{get_actual_column('QUERY_ID')}" as QUERY_ID,
-                        "{get_actual_column('AGGREGATE_METHOD')}" as AGGREGATE_METHOD,
-                        "{get_actual_column('CYCLELIST')}" as CYCLELIST,
-                        "{get_actual_column('POWER')}" as POWER,
-                        "{get_actual_column('TIMESTAMP')}" as TIMESTAMP,
-                        "{get_actual_column('TRUSTED_VALUE')}" as TRUSTED_VALUE,
-                        "{get_actual_column('TX_HASH')}" as TX_HASH,
-                        "{get_actual_column('CURRENT_TIME')}" as CURRENT_TIME,
-                        "{get_actual_column('TIME_DIFF')}" as TIME_DIFF,
-                        "{get_actual_column('VALUE')}" as VALUE,
-                        "{get_actual_column('DISPUTABLE')}" as DISPUTABLE,
+                        {map_column('REPORTER')} as REPORTER,
+                        {map_column('QUERY_TYPE')} as QUERY_TYPE,
+                        {map_column('QUERY_ID')} as QUERY_ID,
+                        {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
+                        {map_column('CYCLELIST')} as CYCLELIST,
+                        {map_column('POWER')} as POWER,
+                        {map_column('TIMESTAMP')} as TIMESTAMP,
+                        {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
+                        {map_column('TX_HASH')} as TX_HASH,
+                        {map_column('CURRENT_TIME')} as CURRENT_TIME,
+                        {map_column('TIME_DIFF')} as TIME_DIFF,
+                        {map_column('VALUE')} as VALUE,
+                        {map_column('DISPUTABLE')} as DISPUTABLE,
                         '{table_info['filename']}' as source_file
                     FROM read_csv_auto('{table_info['path']}', 
                         header=true,
@@ -367,19 +373,19 @@ def load_historical_table(table_info):
                     conn.execute(f"""
                         INSERT OR IGNORE INTO layer_data 
                         SELECT 
-                            CAST("{get_actual_column('REPORTER')}" AS VARCHAR) as REPORTER,
-                            CAST("{get_actual_column('QUERY_TYPE')}" AS VARCHAR) as QUERY_TYPE,
-                            CAST("{get_actual_column('QUERY_ID')}" AS VARCHAR) as QUERY_ID,
-                            CAST("{get_actual_column('AGGREGATE_METHOD')}" AS VARCHAR) as AGGREGATE_METHOD,
-                            TRY_CAST("{get_actual_column('CYCLELIST')}" AS BOOLEAN) as CYCLELIST,
-                            TRY_CAST("{get_actual_column('POWER')}" AS INTEGER) as POWER,
-                            TRY_CAST("{get_actual_column('TIMESTAMP')}" AS BIGINT) as TIMESTAMP,
-                            TRY_CAST("{get_actual_column('TRUSTED_VALUE')}" AS DOUBLE) as TRUSTED_VALUE,
-                            CAST("{get_actual_column('TX_HASH')}" AS VARCHAR) as TX_HASH,
-                            TRY_CAST("{get_actual_column('CURRENT_TIME')}" AS BIGINT) as CURRENT_TIME,
-                            TRY_CAST("{get_actual_column('TIME_DIFF')}" AS INTEGER) as TIME_DIFF,
-                            TRY_CAST("{get_actual_column('VALUE')}" AS DOUBLE) as VALUE,
-                            TRY_CAST("{get_actual_column('DISPUTABLE')}" AS BOOLEAN) as DISPUTABLE,
+                            CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
+                            CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
+                            CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
+                            CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
+                            TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
+                            TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
+                            TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
+                            TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
+                            CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
+                            TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
+                            TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
+                            TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
+                            TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
                             '{table_info['filename']}' as source_file
                         FROM read_csv_auto('{table_info['path']}', 
                             header=true,
@@ -487,33 +493,39 @@ def load_active_table(table_info, is_reload=False):
                     logger.info(f"   - {col_name} ({clean_name}): {col_type}")
                 
                 # Build the SELECT statement with actual column names
-                def get_actual_column(expected_name):
+                def map_column(expected_name):
+                    """Return a quoted column name if present, otherwise SQL NULL.
+                    This prevents errors when the CSV is missing optional columns."""
                     if expected_name in actual_columns:
-                        return actual_columns[expected_name]
-                    # Try common variations  
+                        return f'"{actual_columns[expected_name]}"'
+
+                    # Try common variations (URL-encoded or case variations)
                     for actual_name in actual_columns.values():
                         if actual_name.replace('+AF8-', '_').replace('%5F', '_') == expected_name:
-                            return actual_name
-                    return expected_name  # fallback
+                            return f'"{actual_name}"'
+
+                    # Column truly not present – use SQL NULL literal instead of a missing identifier
+                    logger.debug(f"🕳️  Column '{expected_name}' not found in CSV. Inserting NULL for it.")
+                    return 'NULL'
                 
                 logger.info("📥 Loading CSV data into database...")
                 # Load data directly with proper error handling and column mapping
                 conn.execute(f"""
                     INSERT OR IGNORE INTO layer_data 
                     SELECT 
-                        "{get_actual_column('REPORTER')}" as REPORTER,
-                        "{get_actual_column('QUERY_TYPE')}" as QUERY_TYPE,
-                        "{get_actual_column('QUERY_ID')}" as QUERY_ID,
-                        "{get_actual_column('AGGREGATE_METHOD')}" as AGGREGATE_METHOD,
-                        "{get_actual_column('CYCLELIST')}" as CYCLELIST,
-                        "{get_actual_column('POWER')}" as POWER,
-                        "{get_actual_column('TIMESTAMP')}" as TIMESTAMP,
-                        "{get_actual_column('TRUSTED_VALUE')}" as TRUSTED_VALUE,
-                        "{get_actual_column('TX_HASH')}" as TX_HASH,
-                        "{get_actual_column('CURRENT_TIME')}" as CURRENT_TIME,
-                        "{get_actual_column('TIME_DIFF')}" as TIME_DIFF,
-                        "{get_actual_column('VALUE')}" as VALUE,
-                        "{get_actual_column('DISPUTABLE')}" as DISPUTABLE,
+                        {map_column('REPORTER')} as REPORTER,
+                        {map_column('QUERY_TYPE')} as QUERY_TYPE,
+                        {map_column('QUERY_ID')} as QUERY_ID,
+                        {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
+                        {map_column('CYCLELIST')} as CYCLELIST,
+                        {map_column('POWER')} as POWER,
+                        {map_column('TIMESTAMP')} as TIMESTAMP,
+                        {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
+                        {map_column('TX_HASH')} as TX_HASH,
+                        {map_column('CURRENT_TIME')} as CURRENT_TIME,
+                        {map_column('TIME_DIFF')} as TIME_DIFF,
+                        {map_column('VALUE')} as VALUE,
+                        {map_column('DISPUTABLE')} as DISPUTABLE,
                         '{table_info['filename']}' as source_file
                     FROM read_csv_auto('{table_info['path']}', 
                         header=true,
@@ -538,19 +550,19 @@ def load_active_table(table_info, is_reload=False):
                     conn.execute(f"""
                         INSERT OR IGNORE INTO layer_data 
                         SELECT 
-                            CAST("{get_actual_column('REPORTER')}" AS VARCHAR) as REPORTER,
-                            CAST("{get_actual_column('QUERY_TYPE')}" AS VARCHAR) as QUERY_TYPE,
-                            CAST("{get_actual_column('QUERY_ID')}" AS VARCHAR) as QUERY_ID,
-                            CAST("{get_actual_column('AGGREGATE_METHOD')}" AS VARCHAR) as AGGREGATE_METHOD,
-                            TRY_CAST("{get_actual_column('CYCLELIST')}" AS BOOLEAN) as CYCLELIST,
-                            TRY_CAST("{get_actual_column('POWER')}" AS INTEGER) as POWER,
-                            TRY_CAST("{get_actual_column('TIMESTAMP')}" AS BIGINT) as TIMESTAMP,
-                            TRY_CAST("{get_actual_column('TRUSTED_VALUE')}" AS DOUBLE) as TRUSTED_VALUE,
-                            CAST("{get_actual_column('TX_HASH')}" AS VARCHAR) as TX_HASH,
-                            TRY_CAST("{get_actual_column('CURRENT_TIME')}" AS BIGINT) as CURRENT_TIME,
-                            TRY_CAST("{get_actual_column('TIME_DIFF')}" AS INTEGER) as TIME_DIFF,
-                            TRY_CAST("{get_actual_column('VALUE')}" AS DOUBLE) as VALUE,
-                            TRY_CAST("{get_actual_column('DISPUTABLE')}" AS BOOLEAN) as DISPUTABLE,
+                            CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
+                            CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
+                            CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
+                            CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
+                            TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
+                            TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
+                            TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
+                            TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
+                            CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
+                            TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
+                            TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
+                            TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
+                            TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
                             '{table_info['filename']}' as source_file
                         FROM read_csv_auto('{table_info['path']}', 
                             header=true,
