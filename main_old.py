@@ -352,9 +352,9 @@ def load_historical_table(table_info):
                 """)
                 
                 # Get the count of rows actually inserted
-                total_rows = safe_get(conn.execute("""
+                total_rows = conn.execute("""
                     SELECT COUNT(*) FROM layer_data WHERE source_file = ?
-                """, [table_info['filename']]).fetchone())
+                , [table_info['filename']]).fetchone()[0]
                 
                 logger.info(f"✅ Successfully inserted {total_rows} rows from {table_info['filename']}")
                 
@@ -389,9 +389,9 @@ def load_historical_table(table_info):
                         )
                     """)
                     
-                    total_rows = safe_get(conn.execute("""
+                    total_rows = conn.execute("""
                         SELECT COUNT(*) FROM layer_data WHERE source_file = ?
-                    """, [table_info['filename']]).fetchone())
+                    """, [table_info['filename']]).fetchone()[0]
                     
                     logger.info(f"✅ Fallback successful: inserted {total_rows} rows from {table_info['filename']}")
                     
@@ -523,9 +523,9 @@ def load_active_table(table_info, is_reload=False):
                 """)
                 
                 # Get the count of rows actually inserted
-                total_rows = safe_get(conn.execute("""
+                total_rows = conn.execute("""
                     SELECT COUNT(*) FROM layer_data WHERE source_file = ?
-                """, [table_info['filename']]).fetchone())
+                """, [table_info['filename']]).fetchone()[0]
                 
                 logger.info(f"✅ Successfully inserted {total_rows} rows from {table_info['filename']}")
                 
@@ -560,9 +560,9 @@ def load_active_table(table_info, is_reload=False):
                         )
                     """)
                     
-                    total_rows = safe_get(conn.execute("""
+                    total_rows = conn.execute("""
                         SELECT COUNT(*) FROM layer_data WHERE source_file = ?
-                    """, [table_info['filename']]).fetchone())
+                    """, [table_info['filename']]).fetchone()[0]
                     
                     logger.info(f"✅ Fallback successful: inserted {total_rows} rows from {table_info['filename']}")
                     
@@ -684,7 +684,7 @@ def load_csv_files():
         
         # Get current total from database with thread safety
         with db_lock:
-            actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+            actual_total = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()[0]
         
         data_info.update({
             "tables": tables_info,
@@ -740,7 +740,7 @@ def periodic_reload():
                 if result:
                     # Update total count with thread safety
                     with db_lock:
-                        actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+                        actual_total = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()[0]
                     data_info["total_rows"] = actual_total
                     data_info["last_updated"] = time.time()
                     logger.info(f"🔄 Reloaded active table, database now has {formatNumber(actual_total)} rows")
@@ -942,7 +942,7 @@ async def get_data(
         with db_lock:
             try:
                 # First check if we have any data at all
-                total_in_db = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+                total_in_db = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()[0]
                 logger.info(f"🔍 Debug: Total rows in database: {total_in_db}")
                 
                 if total_in_db == 0:
@@ -961,7 +961,7 @@ async def get_data(
                     FROM layer_data 
                     WHERE {where_clause}
                 """
-                total = safe_get(conn.execute(count_query, list(params.values())).fetchone())
+                total = conn.execute(count_query, all_params).fetchone()[0]
                 logger.info(f"🔍 Debug: Filtered total: {total}")
                 
                 # Calculate actual limit and offset
@@ -1060,26 +1060,26 @@ async def get_stats():
             safe_filter, safe_params = get_safe_timestamp_filter()
             
             # Basic counts using safe timestamp filter
-            stats["total_rows"] = safe_get(conn.execute(f"SELECT COUNT(*) FROM layer_data WHERE {safe_filter}", safe_params).fetchone())
-            stats["unique_reporters"] = safe_get(conn.execute(f"SELECT COUNT(DISTINCT REPORTER) FROM layer_data WHERE {safe_filter}", safe_params).fetchone())
-            stats["unique_query_types"] = safe_get(conn.execute(f"SELECT COUNT(DISTINCT QUERY_TYPE) FROM layer_data WHERE {safe_filter}", safe_params).fetchone())
+            stats["total_rows"] = conn.execute(f"SELECT COUNT(*) FROM layer_data WHERE {safe_filter}", safe_params).fetchone()[0]
+            stats["unique_reporters"] = conn.execute(f"SELECT COUNT(DISTINCT REPORTER) FROM layer_data WHERE {safe_filter}", safe_params).fetchone()[0]
+            stats["unique_query_types"] = conn.execute(f"SELECT COUNT(DISTINCT QUERY_TYPE) FROM layer_data WHERE {safe_filter}", safe_params).fetchone()[0]
             
             # Unique query IDs in past 30 days
             days_30_ms = 30 * 24 * 60 * 60 * 1000  # 30 days in milliseconds
             current_time_ms = int(time.time() * 1000)
             start_time_30d = current_time_ms - days_30_ms
             
-            unique_query_ids_30d = safe_get(conn.execute(f"""
+            unique_query_ids_30d = conn.execute(f"""
                 SELECT COUNT(DISTINCT QUERY_ID) 
                 FROM layer_data 
                 WHERE TIMESTAMP >= ? AND {safe_filter}
-            """, [start_time_30d] + safe_params).fetchone())
+            """, [start_time_30d] + safe_params).fetchone()[0]
             
             stats["unique_query_ids_30d"] = unique_query_ids_30d
             
             # Average agreement calculation - simplified and more robust
             # Calculate agreement percentage for all records where both values exist
-            average_agreement_result = safe_get(conn.execute("""
+            average_agreement_result = conn.execute("""
                 SELECT 
                     AVG(CASE 
                         WHEN VALUE = TRUSTED_VALUE THEN 100.0
@@ -1091,7 +1091,7 @@ async def get_stats():
                 WHERE VALUE IS NOT NULL 
                 AND TRUSTED_VALUE IS NOT NULL 
                 AND TRUSTED_VALUE != 0
-            """).fetchone())
+            """).fetchone()
             
             if average_agreement_result and average_agreement_result[0] is not None:
                 stats["average_agreement"] = round(average_agreement_result[0], 2)
@@ -1099,18 +1099,18 @@ async def get_stats():
                 stats["average_agreement"] = None
             
             # Value statistics
-            value_stats = safe_get(conn.execute("""
+            value_stats = conn.execute("""
                 SELECT 
                     MIN(VALUE) as min_value,
                     MAX(VALUE) as max_value,
                     MEDIAN(VALUE) as median_value
                 FROM layer_data
-            """).fetchone())
+            """).fetchone()
             
             stats["value_stats"] = {
-                "min": safe_get(value_stats, 0, 0),
-                "max": safe_get(value_stats, 1, 0),
-                "median": safe_get(value_stats, 2, 0)
+                "min": value_stats[0],
+                "max": value_stats[1],
+                "median": value_stats[2]
             }
             
             # Total reporter power using safe timestamp approach to avoid incomplete blocks
@@ -1140,10 +1140,10 @@ async def get_stats():
                 stats["recent_reporter_count"] = 0
             
             # Recent activity (last hour)
-            recent_count = safe_get(conn.execute("""
+            recent_count = conn.execute("""
                 SELECT COUNT(*) FROM layer_data 
                 WHERE CURRENT_TIME > (SELECT MAX(CURRENT_TIME) - 3600000 FROM layer_data)
-            """).fetchone())
+            """).fetchone()[0]
             
             stats["recent_activity"] = recent_count
             
@@ -1154,50 +1154,50 @@ async def get_stats():
             hours_48_ms = 48 * 60 * 60 * 1000  # 48 hours in milliseconds
             
             # Count questionable values (DISPUTABLE = true AND within 72 hours)
-            questionable_stats = safe_get(conn.execute("""
+            questionable_stats = conn.execute("""
                 SELECT 
                     COUNT(*) as total_questionable,
                     COUNT(CASE WHEN (? - TIMESTAMP) < ? THEN 1 END) as urgent_questionable
                 FROM layer_data 
                 WHERE DISPUTABLE = true 
                 AND (? - TIMESTAMP) < ?
-            """, [current_time_ms, hours_48_ms, current_time_ms, hours_72_ms]).fetchone())
+            """, [current_time_ms, hours_48_ms, current_time_ms, hours_72_ms]).fetchone()
             
             stats["questionable_values"] = {
-                "total": safe_get(questionable_stats, 0, 0),
-                "urgent": safe_get(questionable_stats, 1, 0),  # Count within 48 hours
-                "has_urgent": safe_get(questionable_stats, 1, 0) > 0  # Boolean for urgent styling
+                "total": questionable_stats[0],
+                "urgent": questionable_stats[1],  # Count within 48 hours
+                "has_urgent": questionable_stats[1] > 0  # Boolean for urgent styling
             }
             
             # Top reporters
-            top_reporters = safe_get(conn.execute("""
+            top_reporters = conn.execute("""
                 SELECT REPORTER, COUNT(*) as count 
                 FROM layer_data 
                 GROUP BY REPORTER 
                 ORDER BY count DESC 
                 LIMIT 50
-            """).df().to_dict(orient="records"))
+            """).df().to_dict(orient="records")
             
             stats["top_reporters"] = top_reporters
             
             # Top query IDs
-            top_query_ids = safe_get(conn.execute("""
+            top_query_ids = conn.execute("""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
                 LIMIT 50
-            """).df().to_dict(orient="records"))
+            """).df().to_dict(orient="records")
             
             stats["top_query_ids"] = top_query_ids
             
             # Query type distribution
-            query_types = safe_get(conn.execute("""
+            query_types = conn.execute("""
                 SELECT QUERY_TYPE, COUNT(*) as count 
                 FROM layer_data 
                 GROUP BY QUERY_TYPE 
                 ORDER BY count DESC
-            """).df().to_dict(orient="records"))
+            """).df().to_dict(orient="records")
             
             stats["query_types"] = query_types
         
@@ -1262,7 +1262,7 @@ async def get_analytics(
                 num_buckets = 30
         
         current_time_ms = int(time.time() * 1000)
-        start_time = current_time_ms - (int(num_buckets) * int(interval_ms))
+        start_time = current_time_ms - (num_buckets * interval_ms)
         
         # Use optimized query with shorter timeout for cellular
         with db_lock:
@@ -1384,7 +1384,7 @@ async def search_data(
                 ) AND {safe_filter}
             """
             
-            total_count = safe_get(conn.execute(count_query, safe_params).fetchone())
+            total_count = conn.execute(count_query, safe_params).fetchone()[0]
             
             # Generate statistics and insights
             stats_query = f"""
@@ -1445,20 +1445,20 @@ async def search_data(
             
             # Build stats object
             stats = {
-                "total_matches": safe_get(stats_result, 0, 0),
-                "unique_reporters": safe_get(stats_result, 1, 0),
-                "unique_query_ids": safe_get(stats_result, 2, 0),
+                "total_matches": stats_result[0] if stats_result[0] else 0,
+                "unique_reporters": stats_result[1] if stats_result[1] else 0,
+                "unique_query_ids": stats_result[2] if stats_result[2] else 0,
                 "value_range": {
-                    "min": safe_get(stats_result, 3),
-                    "max": safe_get(stats_result, 4)
-                } if safe_get(stats_result, 3) is not None and safe_get(stats_result, 4) is not None else None,
-                "avg_agreement": safe_get(stats_result, 5,),
+                    "min": stats_result[3] if stats_result[3] is not None else None,
+                    "max": stats_result[4] if stats_result[4] is not None else None
+                } if stats_result[3] is not None and stats_result[4] is not None else None,
+                "avg_agreement": stats_result[5] if stats_result[5] is not None else None,
                 "time_range": {
-                    "oldest": safe_get(stats_result, 6),
-                    "newest": safe_get(stats_result, 7)
-                } if safe_get(stats_result, 6) and safe_get(stats_result, 7) else None,
+                    "oldest": stats_result[6] if stats_result[6] else None,
+                    "newest": stats_result[7] if stats_result[7] else None
+                } if stats_result[6] and stats_result[7] else None,
                 "power_stats": {
-                    "total": safe_get(stats_result, 8, 0)
+                    "total": stats_result[8] if stats_result[8] else 0
                 },
                 "top_reporter": {
                     "reporter": top_reporter_result[0],
@@ -2233,7 +2233,7 @@ async def get_reporters(
         with db_lock:
             # Get total count
             count_query = f"SELECT COUNT(*) FROM reporters WHERE {where_clause}"
-            total = safe_get(conn.execute(count_query, list(params.values())).fetchone())
+            total = conn.execute(count_query, list(params.values())).fetchone()[0]
             
             # Get paginated data with activity status
             if search:
@@ -2356,11 +2356,11 @@ async def get_reporter_detail(address: str):
             """, [address]).fetchone()
             
             stats = {
-                'total_transactions': safe_get(stats_result, 0, 0),
-                'unique_queries': safe_get(stats_result, 1, 0),
-                'avg_value': safe_get(stats_result, 2, 0.0),
-                'first_transaction': pd.to_datetime(safe_get(stats_result, 3), unit='ms').isoformat() if safe_get(stats_result, 3) else None,
-                'last_transaction': pd.to_datetime(safe_get(stats_result, 4), unit='ms').isoformat() if safe_get(stats_result, 4) else None
+                'total_transactions': int(stats_result[0]) if stats_result[0] else 0,
+                'unique_queries': int(stats_result[1]) if stats_result[1] else 0,
+                'avg_value': float(stats_result[2]) if stats_result[2] else 0.0,
+                'first_transaction': pd.to_datetime(stats_result[3], unit='ms').isoformat() if stats_result[3] else None,
+                'last_transaction': pd.to_datetime(stats_result[4], unit='ms').isoformat() if stats_result[4] else None
             }
             
             return {
@@ -2499,7 +2499,7 @@ async def get_reporters_summary():
     try:
         with db_lock:
             # Get basic stats with proper active_24h calculation
-            summary_result = conn.execute("""
+            summary_result = conn.execute(
                 SELECT 
                     COUNT(*) as total_reporters,
                     COUNT(CASE WHEN jailed = true THEN 1 END) as jailed_reporters,
@@ -2515,19 +2515,19 @@ async def get_reporters_summary():
                         SELECT MAX(CURRENT_TIME) - 86400000 FROM layer_data
                     )
                 ) ld ON r.address = ld.address
-            """).fetchone()
+            ).fetchone()
             
             # Get top reporters by power
-            top_reporters = conn.execute("""
+            top_reporters = conn.execute(
                 SELECT moniker, address, power
                 FROM reporters 
                 WHERE power > 0
                 ORDER BY power DESC 
                 LIMIT 10
-            """).fetchall()
+            ).fetchall()
             
             # Get commission rate distribution
-            commission_dist = conn.execute("""
+            commission_dist = conn.execute(
                 SELECT 
                     commission_rate,
                     COUNT(*) as count
@@ -2535,29 +2535,29 @@ async def get_reporters_summary():
                 GROUP BY commission_rate
                 ORDER BY count DESC
                 LIMIT 10
-            """).fetchall()
+            ).fetchall()
             
             return {
                 "summary": {
-                    "total_reporters": safe_get(summary_result, 0, 0),
-                    "jailed_reporters": safe_get(summary_result, 1, 0),
-                    "active_reporters": safe_get(summary_result, 2, 0),
-                    "avg_power": safe_get(summary_result, 3, 0.0),
-                    "max_power": safe_get(summary_result, 4, 0),
-                    "total_power": safe_get(summary_result, 5, 0)
+                    "total_reporters": int(summary_result[0]) if summary_result[0] else 0,
+                    "jailed_reporters": int(summary_result[1]) if summary_result[1] else 0,
+                    "active_reporters": int(summary_result[2]) if summary_result[2] else 0,
+                    "avg_power": float(summary_result[3]) if summary_result[3] else 0.0,
+                    "max_power": int(summary_result[4]) if summary_result[4] else 0,
+                    "total_power": int(summary_result[5]) if summary_result[5] else 0
                 },
                 "top_reporters": [
                     {
                         "moniker": row[0],
                         "address": row[1],
-                        "power": safe_get(row, 2, 0)
+                        "power": int(row[2])
                     }
                     for row in top_reporters
                 ],
                 "commission_distribution": [
                     {
                         "commission_rate": row[0],
-                        "count": safe_get(row, 1, 0)
+                        "count": int(row[1])
                     }
                     for row in commission_dist
                 ]
