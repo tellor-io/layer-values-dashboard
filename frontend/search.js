@@ -1,3 +1,53 @@
+// POLYFILLS FOR OLDER MOBILE BROWSERS -----------------------------
+if (typeof AbortController === 'undefined') {
+    console.warn('AbortController not supported – using fallback stub.');
+    window.AbortController = function() { return { abort: () => {}, signal: undefined }; };
+}
+
+if (typeof URLSearchParams === 'undefined') {
+    console.warn('URLSearchParams not supported – polyfilling.');
+    window.URLSearchParams = function(init) {
+        this.params = [];
+        if (init && typeof init === 'object') {
+            for (const key in init) {
+                this.params.push(`${encodeURIComponent(key)}=${encodeURIComponent(init[key])}`);
+            }
+        } else if (typeof init === 'string') {
+            this.params = [init];
+        }
+        this.append = (k, v) => this.params.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+        this.toString = () => this.params.join('&');
+    };
+}
+
+if (typeof window.fetch === 'undefined') {
+    console.warn('fetch API not supported – using XHR polyfill.');
+    window.fetch = function(url, options = {}) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open(options.method || 'GET', typeof url === 'string' ? url : url.toString(), true);
+            for (const h in (options.headers || {})) {
+                xhr.setRequestHeader(h, options.headers[h]);
+            }
+            xhr.onload = () => {
+                const body = 'response' in xhr ? xhr.response : xhr.responseText;
+                resolve({
+                    ok: xhr.status >= 200 && xhr.status < 300,
+                    status: xhr.status,
+                    statusText: xhr.statusText,
+                    text: () => Promise.resolve(body),
+                    json: () => {
+                        try { return Promise.resolve(JSON.parse(body)); } catch(e) { return Promise.reject(e); }
+                    }
+                });
+            };
+            xhr.onerror = () => reject(new TypeError('Network request failed'));
+            xhr.send(options.body || null);
+        });
+    };
+}
+// ----------------------------------------------------------------
+
 // Global state for search page
 let currentSearchQuery = '';
 let currentPage = 1;

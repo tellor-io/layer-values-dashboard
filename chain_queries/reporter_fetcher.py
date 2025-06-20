@@ -10,7 +10,7 @@ import yaml
 import logging
 import time
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import sys
@@ -21,8 +21,19 @@ sys.path.append(str(Path(__file__).parent.parent / "backend"))
 
 logger = logging.getLogger(__name__)
 
+# Import the maximal power tracker
+try:
+    from .find_maximal_power import MaximalPowerTracker
+except ImportError:
+    # Fallback for different import paths
+    try:
+        from find_maximal_power import MaximalPowerTracker
+    except ImportError:
+        logger.warning("⚠️  Could not import MaximalPowerTracker - maximal power tracking disabled")
+        MaximalPowerTracker = None
+
 class ReporterFetcher:
-    def __init__(self, binary_path: str = "./layerd", update_interval: int = 60, rpc_url: str = None):
+    def __init__(self, binary_path: str = "./layerd", update_interval: int = 60, rpc_url: Optional[str] = None):
         """
         Initialize the reporter fetcher.
         
@@ -31,21 +42,53 @@ class ReporterFetcher:
             update_interval: How often to fetch data (in seconds)
             rpc_url: RPC URL for layerd commands (optional)
         """
-        self.binary_path = Path(binary_path)
+        # Store as Path object for existence checks, but keep original string for subprocess
+        self.binary_path_obj = Path(binary_path)
+        self.binary_path = binary_path  # Keep original string for subprocess
         self.update_interval = update_interval
         self.rpc_url = rpc_url
         self.is_running = False
         self.last_fetch_time = None
         self.fetch_thread = None
         
+        # Maximal power tracking
+        self.maximal_power_tracker = None
+        self.last_maximal_power_update = None
+        self.maximal_power_interval = 3600  # Update maximal power every hour
+        
         # Validate binary exists
-        if not self.binary_path.exists():
-            raise FileNotFoundError(f"Binary not found at {self.binary_path}")
+        if not self.binary_path_obj.exists():
+            raise FileNotFoundError(f"Binary not found at {self.binary_path_obj}")
         
         logger.info(f"🔗 ReporterFetcher initialized with binary: {self.binary_path}")
         if self.rpc_url:
             logger.info(f"🌐 Using RPC URL: {self.rpc_url}")
         logger.info(f"⏰ Update interval: {self.update_interval} seconds")
+
+    def initialize_maximal_power_tracking(self, db_connection):
+        """
+        Initialize the maximal power tracker with database connection.
+        """
+        if MaximalPowerTracker is None:
+            logger.warning("⚠️  MaximalPowerTracker not available - skipping initialization")
+            self.maximal_power_tracker = None
+            return
+            
+        try:
+            self.maximal_power_tracker = MaximalPowerTracker(
+                binary_path=self.binary_path,
+                rpc_url=self.rpc_url,
+                db_connection=db_connection
+            )
+            
+            # Create the maximal power table
+            self.maximal_power_tracker.create_maximal_power_table()
+            
+            logger.info("🔋 Maximal power tracking initialized")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize maximal power tracking: {e}")
+            self.maximal_power_tracker = None
 
     def fetch_reporters_data(self) -> Optional[Dict[str, Any]]:
         """
@@ -58,7 +101,7 @@ class ReporterFetcher:
             logger.info("📡 Fetching reporter data from chain...")
             
             # Execute the RPC query
-            cmd = [str(self.binary_path), "query", "reporter", "reporters"]
+            cmd = [self.binary_path, "query", "reporter", "reporters"]
             
             # Add --node parameter if RPC URL is provided
             if self.rpc_url:
@@ -212,6 +255,28 @@ class ReporterFetcher:
             logger.error(f"❌ Error storing reporter data: {e}")
             return False
 
+    def update_maximal_power_if_needed(self, db_connection):
+        """
+        Update maximal power data if enough time has passed since the last update.
+        """
+        if not self.maximal_power_tracker:
+            return
+        
+        try:
+            current_time = datetime.now(timezone.utc)
+            
+            # Check if we need to update maximal power
+            if (self.last_maximal_power_update is None or 
+                (current_time - self.last_maximal_power_update).total_seconds() >= self.maximal_power_interval):
+                
+                logger.info("🔋 Updating maximal power snapshot...")
+                self.maximal_power_tracker.update_realtime_maximal_power()
+                self.last_maximal_power_update = current_time
+                logger.info("✅ Maximal power snapshot updated")
+            
+        except Exception as e:
+            logger.error(f"❌ Error updating maximal power: {e}")
+
     def fetch_and_store(self, db_connection) -> bool:
         """
         Fetch reporter data from chain and store in database.
@@ -234,6 +299,9 @@ class ReporterFetcher:
         success = self.store_reporters_data(reporters, db_connection)
         if success:
             self.last_fetch_time = datetime.now(timezone.utc)
+            
+            # Update maximal power if needed
+            self.update_maximal_power_if_needed(db_connection)
         
         return success
 
@@ -248,10 +316,14 @@ class ReporterFetcher:
             logger.warning("⚠️  Periodic updates already running")
             return
         
+        # Initialize maximal power tracking
+        self.initialize_maximal_power_tracking(db_connection)
+        
         self.is_running = True
         
         def update_loop():
             logger.info(f"🔄 Starting periodic reporter updates every {self.update_interval} seconds")
+            logger.info(f"🔋 Maximal power updates every {self.maximal_power_interval} seconds")
             
             while self.is_running:
                 try:
@@ -357,6 +429,39 @@ class ReporterFetcher:
             logger.error(f"❌ Error creating placeholder reporters: {e}")
             return False
 
+    def initialize_historical_maximal_power(self, db_connection, days_back: int = 7):
+        """
+        Initialize historical maximal power data. This should be called once during startup.
+        
+        Args:
+            db_connection: DuckDB connection
+            days_back: Number of days of historical data to collect
+        """
+        if not self.maximal_power_tracker:
+            logger.warning("⚠️  Maximal power tracker not initialized")
+            return
+        
+        try:
+            logger.info(f"🔄 Initializing historical maximal power data for last {days_back} days...")
+            
+            # Check if we already have sufficient historical data (more than just 1-2 recent snapshots)
+            total_snapshots = db_connection.execute("""
+                SELECT COUNT(*) FROM maximal_power_snapshots
+            """).fetchone()
+            
+            if total_snapshots and total_snapshots[0] > 5:  # Only skip if we have more than 5 data points
+                logger.info(f"✅ Sufficient maximal power data already exists ({total_snapshots[0]} snapshots), skipping historical initialization")
+                return
+            else:
+                logger.info(f"📊 Found only {total_snapshots[0] if total_snapshots else 0} snapshots, proceeding with historical data collection...")
+            
+            # Initialize historical data
+            snapshots = self.maximal_power_tracker.initialize_historical_data(days_back)
+            logger.info(f"✅ Historical maximal power initialization complete: {len(snapshots)} snapshots")
+            
+        except Exception as e:
+            logger.error(f"❌ Error initializing historical maximal power: {e}")
+
 
 def test_fetcher():
     """Test function to verify the fetcher works with example data."""
@@ -371,11 +476,15 @@ def test_fetcher():
         
         # Create fetcher without checking binary for test
         fetcher = ReporterFetcher.__new__(ReporterFetcher)
-        fetcher.binary_path = Path("../layerd")  # Correct path relative to chain_queries
+        fetcher.binary_path_obj = Path("../layerd")  # Correct path relative to chain_queries
+        fetcher.binary_path = "../layerd"  # String path for subprocess
         fetcher.update_interval = 60
         fetcher.is_running = False
         fetcher.last_fetch_time = None
         fetcher.fetch_thread = None
+        fetcher.maximal_power_tracker = None
+        fetcher.last_maximal_power_update = None
+        fetcher.maximal_power_interval = 3600
         
         reporters = fetcher.parse_reporter_data(example_data)
         

@@ -335,8 +335,8 @@ const loadStats = async (forceRefresh = false) => {
         elements.uniqueQueryIds30d.textContent = formatNumber(stats.unique_query_ids_30d);
         
         // Calculate reporting power utilization percentage
-        if (stats.total_reporter_power && reportersSummary.summary && reportersSummary.summary.total_power) {
-            const reportingPower = stats.total_reporter_power;
+        if (stats.active_reporter_power && reportersSummary.summary && reportersSummary.summary.total_power) {
+            const reportingPower = stats.active_reporter_power;
             const totalRegistryPower = reportersSummary.summary.total_power;
             const utilizationPercent = (reportingPower / totalRegistryPower * 100).toFixed(1);
             elements.totalReporterPower.textContent = `${utilizationPercent}%`;
@@ -746,8 +746,8 @@ const loadAnalytics = async (timeframe) => {
         
         console.log(`📊 Loading analytics - Timeframe: ${timeframe}, Mobile: ${IS_MOBILE}`);
         
-        // Fetch analytics data with mobile optimization
-        const data = await apiCall('/analytics', { timeframe });
+        // Fetch analytics data with mobile optimization - using reporters-activity-analytics for maximal power data
+        const data = await apiCall('/reporters-activity-analytics', { timeframe });
         
         // Update title
         elements.analyticsTitle.textContent = data.title;
@@ -776,61 +776,198 @@ const createAnalyticsChart = (data) => {
         analyticsChart.destroy();
     }
     
-    // Prepare data for Chart.js
-    const labels = data.data.map(item => item.time_label);
-    const counts = data.data.map(item => item.count);
-    
     // Create gradient
     const gradient = ctx.createLinearGradient(0, 0, 0, 400);
     gradient.addColorStop(0, 'rgba(0, 255, 136, 0.3)');
     gradient.addColorStop(1, 'rgba(0, 255, 136, 0.05)');
     
+    // Prepare datasets - start with total reports
+    const datasets = [{
+        label: 'Total Reports',
+        data: data.total_reports || [],
+        borderColor: '#00ff88',
+        backgroundColor: gradient,
+        borderWidth: 2,
+        fill: true,
+        tension: 0,
+        pointBackgroundColor: '#00ff88',
+        pointBorderColor: '#000',
+        pointBorderWidth: 2,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        yAxisID: 'y'
+    }];
+    
+    // Add active reporters dataset
+    if (data.active_reporters) {
+        datasets.push({
+            label: 'Active Reporters',
+            data: data.active_reporters,
+            borderColor: '#00d4ff',
+            backgroundColor: 'rgba(0, 212, 255, 0.1)',
+            borderWidth: 2,
+            fill: false,
+            tension: 0,
+            pointBackgroundColor: '#00d4ff',
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            yAxisID: 'y'
+        });
+    }
+    
+    // Add representative power dataset if available
+    if (data.representative_power_of_aggr) {
+        datasets.push({
+            label: 'Median Power Per Report',
+            data: data.representative_power_of_aggr,
+            borderColor: '#a855f7',
+            backgroundColor: 'rgba(168, 85, 247, 0.1)',
+            borderWidth: 2,
+            fill: false,
+            tension: 0,
+            pointBackgroundColor: '#a855f7',
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            yAxisID: 'y1'
+        });
+    }
+    
+    // Add maximal power dataset if data is available
+    if (data.has_maximal_power_data && data.maximal_power_network) {
+        datasets.push({
+            label: 'Maximal Network Power',
+            data: data.maximal_power_network,
+            borderColor: '#ff8c00',
+            backgroundColor: 'rgba(255, 140, 0, 0.1)',
+            borderWidth: 3,
+            borderDash: [5, 5],  // Dashed line to distinguish from median power
+            fill: false,
+            tension: 0,
+            pointBackgroundColor: '#ff8c00',
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            yAxisID: 'y1'
+        });
+    }
+    
     analyticsChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: labels,
-            datasets: [{
-                label: 'Reports',
-                data: counts,
-                borderColor: '#00ff88',
-                backgroundColor: gradient,
-                borderWidth: 2,
-                fill: true,
-                tension: 0,
-                pointBackgroundColor: '#00ff88',
-                pointBorderColor: '#000',
-                pointBorderWidth: 2,
-                pointRadius: 5,
-                pointHoverRadius: 7
-            }]
+            labels: data.time_labels || [],
+            datasets: datasets
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
                 legend: {
-                    display: false
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        color: '#00d4ff',
+                        usePointStyle: true,
+                        padding: 15,
+                        font: {
+                            family: 'Inter',
+                            size: 12
+                        }
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    backgroundColor: 'rgba(26, 26, 46, 0.9)',
+                    titleColor: '#00d4ff',
+                    bodyColor: '#00ff88',
+                    borderColor: '#333344',
+                    borderWidth: 1,
+                    callbacks: {
+                        title: function(context) {
+                            return `Time: ${context[0].label}`;
+                        },
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            let value = context.formattedValue;
+                            
+                            // Format power values differently
+                            if (dataset.label.includes('Power')) {
+                                value = parseFloat(context.raw).toLocaleString();
+                            }
+                            
+                            return `${dataset.label}: ${value}`;
+                        }
+                    }
                 }
             },
             scales: {
                 x: {
                     ticks: {
                         color: '#00d4ff',
-                        maxTicksLimit: data.timeframe === 'weekly' ? 8 : 12,
+                        maxTicksLimit: 12,
+                        font: {
+                            family: 'Inter',
+                            size: 11
+                        }
                     },
                     grid: {
                         color: 'rgba(51, 51, 68, 0.5)'
                     }
                 },
                 y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
                     ticks: {
-                        color: '#00d4ff',
-                        beginAtZero: true
+                        color: '#00ff88',
+                        beginAtZero: true,
+                        font: {
+                            family: 'Inter',
+                            size: 11
+                        }
                     },
                     grid: {
                         color: 'rgba(51, 51, 68, 0.5)'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Reports & Active Reporters',
+                        color: '#00ff88'
+                    }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    ticks: {
+                        color: '#a855f7',
+                        font: {
+                            family: 'Inter',
+                            size: 11
+                        },
+                        callback: function(value) {
+                            return value.toLocaleString();  // Format large numbers with commas
+                        }
+                    },
+                    grid: {
+                        drawOnChartArea: false,
+                    },
+                    title: {
+                        display: true,
+                        text: 'Power Values',
+                        color: '#a855f7'
                     }
                 }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
             },
             elements: {
                 point: {

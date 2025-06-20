@@ -5,11 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tellor Reporters - Layer Values Dashboard</title>
     <link rel="stylesheet" href="./static/style.css">
+    <!-- Add mobile viewport and error handling -->
+    <style>
+        /* Basic mobile fallback styles if CSS fails to load */
+        @media (max-width: 768px) {
+            body { font-size: 14px; padding: 10px; }
+            .main { padding: 1rem; }
+            .stats-grid { grid-template-columns: 1fr; }  
+        }
+        /* Simple loading indicator for mobile */
+        .mobile-debug {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: red;
+            color: white;
+            padding: 5px;
+            z-index: 9999;
+            font-size: 12px;
+            display: none;
+        }
+        @media (max-width: 768px) {
+            .mobile-debug { display: block; }
+        }
+    </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
 </head>
 <body>
+    <div class="mobile-debug" id="mobile-debug">📱 Mobile Mode</div>
     <div class="app">
         <!-- Main Content -->
         <main class="main">
@@ -153,16 +178,150 @@
     </div>
 
     <script>
+        // Mobile detection
+        const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+        // Mobile debugging function
+        function mobileLog(message) {
+            console.log(`📱 Mobile: ${message}`);
+            if (IS_MOBILE) {
+                const debugEl = document.getElementById('mobile-debug');
+                if (debugEl) {
+                    debugEl.textContent = message;
+                    debugEl.style.background = 'green';
+                }
+            }
+        }
+
+        // Window error handler for mobile debugging
+        window.onerror = function(msg, url, line, col, error) {
+            console.error('Global error:', { msg, url, line, col, error });
+            if (IS_MOBILE) {
+                const debugEl = document.getElementById('mobile-debug');
+                if (debugEl) {
+                    debugEl.textContent = `Error: ${msg}`;
+                    debugEl.style.background = 'red';
+                }
+            }
+            return false;
+        };
+
+        // Initial mobile debug
+        if (IS_MOBILE) {
+            mobileLog('Mobile detected, initializing...');
+        }
+
+        // Mobile-optimized fetch with simpler error handling
+        async function safeFetch(url, options = {}) {
+            try {
+                if (IS_MOBILE) {
+                    mobileLog(`Fetching: ${url}`);
+                }
+                // Shorter timeout for mobile
+                const timeoutMs = IS_MOBILE ? 8000 : 15000;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+                
+                const response = await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                if (IS_MOBILE) {
+                    mobileLog(`✓ Success: ${response.status}`);
+                }
+                return response;
+            } catch (error) {
+                console.error('Fetch error:', error);
+                if (IS_MOBILE) {
+                    mobileLog(`✗ Error: ${error.message}`);
+                }
+                throw error;
+            }
+        }
+
+        // Provide AbortController polyfill fallback
+        if (typeof AbortController === 'undefined') {
+            mobileLog('AbortController not supported, using fallback...');
+            window.AbortController = function() {
+                return {
+                    abort: () => {},
+                    signal: undefined
+                };
+            };
+        }
+
+        // Provide simple URLSearchParams polyfill
+        if (typeof URLSearchParams === 'undefined') {
+            mobileLog('URLSearchParams not supported, polyfilling...');
+            window.URLSearchParams = function(init) {
+                this.params = [];
+                if (init && typeof init === 'object') {
+                    for (const key in init) {
+                        this.params.push(`${encodeURIComponent(key)}=${encodeURIComponent(init[key])}`);
+                    }
+                } else if (typeof init === 'string') {
+                    this.params = [init];
+                }
+                this.toString = () => this.params.join('&');
+            };
+        }
+
+        // Provide fetch polyfill using XMLHttpRequest if not supported
+        if (typeof window.fetch === 'undefined') {
+            mobileLog('fetch API not supported, polyfilling...');
+            window.fetch = function(url, options = {}) {
+                return new Promise((resolve, reject) => {
+                    const request = new XMLHttpRequest();
+                    request.open(options.method || 'GET', url, true);
+                    for (const header in (options.headers || {})) {
+                        request.setRequestHeader(header, options.headers[header]);
+                    }
+                    request.onload = () => {
+                        const responseHeaders = request.getAllResponseHeaders();
+                        const body = 'response' in request ? request.response : request.responseText;
+                        resolve({
+                            ok: request.status >= 200 && request.status < 300,
+                            status: request.status,
+                            statusText: request.statusText,
+                            headers: responseHeaders,
+                            text: () => Promise.resolve(body),
+                            json: () => {
+                                try { return Promise.resolve(JSON.parse(body)); }
+                                catch(e) { return Promise.reject(e); }
+                            }
+                        });
+                    };
+                    request.onerror = () => reject(new TypeError('Network request failed'));
+                    request.send(options.body || null);
+                });
+            };
+        }
+
         class ReportersApp {
             constructor() {
                 this.currentPage = 0;
-                this.pageSize = 110;
+                // Smaller page size for mobile devices for faster loading
+                this.pageSize = IS_MOBILE ? 60 : 110;
                 this.totalReporters = 0;
                 this.maxPower = 0;
                 this.searchTimeout = null;
                 this.reporterActivityChart = null;
                 this.currentTimeframe = '24h';
                 this.isLoadingAnalytics = false;
+                
+                // Add mobile-specific initialization
+                if (IS_MOBILE) {
+                    console.log('📱 Mobile device detected, optimizing...');
+                    // Disable smooth scrolling on mobile
+                    document.documentElement.style.scrollBehavior = 'auto';
+                }
                 
                 this.initializeEventListeners();
                 this.loadInitialData();
@@ -171,9 +330,19 @@
             async loadInitialData() {
                 this.showLoadingOverlay();
                 try {
-                    await this.loadReporterActivityAnalytics(this.currentTimeframe);
-                    await this.loadSummary();
-                    await this.loadReporters();
+                    if (IS_MOBILE) {
+                        // Load components sequentially on mobile to reduce load
+                        await this.loadSummary();
+                        await this.loadReporters();
+                        await this.loadReporterActivityAnalytics(this.currentTimeframe);
+                    } else {
+                        // Load in parallel on desktop
+                        await Promise.all([
+                            this.loadReporterActivityAnalytics(this.currentTimeframe),
+                            this.loadSummary(),
+                            this.loadReporters()
+                        ]);
+                    }
                 } finally {
                     this.hideLoadingOverlay();
                 }
@@ -244,7 +413,7 @@
             
             async loadSummary() {
                 try {
-                    const response = await fetch('/dashboard/api/reporters-summary');
+                    const response = await safeFetch('/dashboard/api/reporters-summary');
                     const data = await response.json();
                     
                     // Update stat cards
@@ -280,7 +449,7 @@
                         sort_by: 'power'
                     });
                     
-                    const response = await fetch(`/dashboard/api/reporters?${params}`);
+                    const response = await safeFetch(`/dashboard/api/reporters?${params}`);
                     const data = await response.json();
                     
                     this.totalReporters = data.total;
@@ -402,16 +571,7 @@
                     loadingEl.style.display = 'flex';
                     
                     // Fetch analytics data
-                    const response = await fetch(`/dashboard/api/reporters-activity-analytics?timeframe=${timeframe}`, {
-                        headers: {
-                            'Cache-Control': 'no-cache',
-                            'Pragma': 'no-cache'
-                        }
-                    });
-                    
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                    }
+                    const response = await safeFetch(`/dashboard/api/reporters-activity-analytics?timeframe=${timeframe}`);
                     
                     const data = await response.json();
                     
@@ -440,6 +600,15 @@
             createReporterActivityChart(data) {
                 const ctx = document.getElementById('reporter-activity-chart').getContext('2d');
                 
+                // Adjust chart height on mobile for better viewport fit
+                const chartContainer = document.getElementById('reporter-activity-chart').parentElement;
+                chartContainer.style.height = IS_MOBILE ? '250px' : '400px';
+                
+                // Dynamic styling variables based on device
+                const pointRadius = IS_MOBILE ? 2 : 4;
+                const hoverRadius = IS_MOBILE ? 4 : 6;
+                const borderWidthMain = IS_MOBILE ? 2 : 3;
+                
                 if (!data.total_reports || data.total_reports.length === 0) {
                     // Destroy existing chart first
                     if (this.reporterActivityChart) {
@@ -456,11 +625,14 @@
                 
                 // Update existing chart data if possible, otherwise recreate
                 if (this.reporterActivityChart && data.time_labels.length === this.reporterActivityChart.data.labels.length) {
+                    // Debug logging for update
+                    console.log('📊 Updating existing chart with median data:', data.representative_power_of_aggr.slice(0, 3));
+                    
                     // Update data efficiently without recreating chart
                     this.reporterActivityChart.data.labels = data.time_labels;
                     this.reporterActivityChart.data.datasets[0].data = data.total_reports;
                     this.reporterActivityChart.data.datasets[1].data = data.active_reporters;
-                    this.reporterActivityChart.data.datasets[2].data = data.representative_power_of_aggr;
+                    this.reporterActivityChart.data.datasets[2].data = [...data.representative_power_of_aggr];  // Create a copy
                     this.reporterActivityChart.update('none'); // No animation for faster updates
                     return;
                 }
@@ -471,61 +643,109 @@
                     this.reporterActivityChart = null;
                 }
                 
+                // Debug logging for median power data
+                console.log('📊 Debug - Median Power Data:', {
+                    'first_5_values': data.representative_power_of_aggr.slice(0, 5),
+                    'last_5_values': data.representative_power_of_aggr.slice(-5),
+                    'min_value': Math.min(...data.representative_power_of_aggr),
+                    'max_value': Math.max(...data.representative_power_of_aggr),
+                    'data_length': data.representative_power_of_aggr.length,
+                    'unique_count': new Set(data.representative_power_of_aggr).size,
+                    'sample_data_types': data.representative_power_of_aggr.slice(0, 3).map(v => typeof v),
+                    'is_array': Array.isArray(data.representative_power_of_aggr),
+                    'full_array': data.representative_power_of_aggr.slice(0, 10)
+                });
+                
+                // Test: create a simple varying array to make sure Chart.js can handle it
+                const testArray = [7628, 7629, 7666, 7667, 7668, 7671, 7672];
+                console.log('📊 Test: Simple test array for comparison:', testArray);
+
+                // Prepare datasets array
+                const datasets = [
+                    {
+                        label: 'Total Reports',
+                        data: data.total_reports,
+                        borderColor: '#00ff88',
+                        backgroundColor: 'rgba(0, 255, 136, 0.1)',
+                        borderWidth: borderWidthMain,
+                        fill: true,
+                        tension: 0.1,
+                        pointBackgroundColor: '#00ff88',
+                        pointBorderColor: '#000',
+                        pointBorderWidth: 1,
+                        pointRadius: pointRadius,
+                        pointHoverRadius: hoverRadius,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Active Reporters',
+                        data: data.active_reporters,
+                        borderColor: '#00d4ff',
+                        backgroundColor: 'rgba(0, 212, 255, 0.1)',
+                        borderWidth: borderWidthMain,
+                        fill: false,
+                        tension: 0.1,
+                        pointBackgroundColor: '#00d4ff',
+                        pointBorderColor: '#000',
+                        pointBorderWidth: 1,
+                        pointRadius: pointRadius,
+                        pointHoverRadius: hoverRadius,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Median Power Per Report',
+                        data: [...data.representative_power_of_aggr],  // Create a copy of the array
+                        borderColor: '#a855f7',
+                        backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                        borderWidth: borderWidthMain,
+                        fill: false,
+                        tension: 0.1,
+                        pointBackgroundColor: '#a855f7',
+                        pointBorderColor: '#000',
+                        pointBorderWidth: 1,
+                        pointRadius: pointRadius,
+                        pointHoverRadius: hoverRadius,
+                        yAxisID: 'y1'
+                    }
+                ];
+                
+                // Add maximal power dataset if data is available
+                if (data.has_maximal_power_data && data.maximal_power_network) {
+                    datasets.push({
+                        label: 'Maximal Power',
+                        data: data.maximal_power_network,
+                        borderColor: '#ff8c00',
+                        backgroundColor: 'rgba(255, 140, 0, 0.1)',
+                        borderWidth: borderWidthMain,
+                        borderDash: [5, 5],  // Dashed line to distinguish from median power
+                        fill: false,
+                        tension: 0.1,
+                        pointBackgroundColor: '#ff8c00',
+                        pointBorderColor: '#000',
+                        pointBorderWidth: 1,
+                        pointRadius: pointRadius,
+                        pointHoverRadius: hoverRadius,
+                        yAxisID: 'y1'
+                    });
+                }
+
                 this.reporterActivityChart = new Chart(ctx, {
                     type: 'line',
                     data: {
                         labels: data.time_labels,
-                        datasets: [
-                            {
-                                label: 'Total Reports',
-                                data: data.total_reports,
-                                borderColor: '#00ff88',
-                                backgroundColor: 'rgba(0, 255, 136, 0.1)',
-                                borderWidth: 3,
-                                fill: true,
-                                tension: 0.1,
-                                pointBackgroundColor: '#00ff88',
-                                pointBorderColor: '#000',
-                                pointBorderWidth: 1,
-                                pointRadius: 4,
-                                pointHoverRadius: 6,
-                                yAxisID: 'y'
-                            },
-                            {
-                                label: 'Active Reporters',
-                                data: data.active_reporters,
-                                borderColor: '#00d4ff',
-                                backgroundColor: 'rgba(0, 212, 255, 0.1)',
-                                borderWidth: 3,
-                                fill: false,
-                                tension: 0.1,
-                                pointBackgroundColor: '#00d4ff',
-                                pointBorderColor: '#000',
-                                pointBorderWidth: 1,
-                                pointRadius: 4,
-                                pointHoverRadius: 6,
-                                yAxisID: 'y'
-                            },
-                            {
-                                label: 'Median Power Per Report',
-                                data: data.representative_power_of_aggr,
-                                borderColor: '#a855f7',
-                                backgroundColor: 'rgba(168, 85, 247, 0.1)',
-                                borderWidth: 3,
-                                fill: false,
-                                tension: 0.1,
-                                pointBackgroundColor: '#a855f7',
-                                pointBorderColor: '#000',
-                                pointBorderWidth: 1,
-                                pointRadius: 4,
-                                pointHoverRadius: 6,
-                                yAxisID: 'y1'
-                            }
-                        ]
+                        datasets: datasets
                     },
                     options: {
+                        onResize: function(chart, size) {
+                            // Log chart data when resizing
+                            console.log('📊 Chart resize - Median data from chart:', chart.data.datasets[2]?.data?.slice(0, 5));
+                        },
                         responsive: true,
                         maintainAspectRatio: false,
+                        animation: IS_MOBILE ? false : {
+                            duration: 500,
+                            easing: 'easeOutQuart'
+                        },
                         plugins: {
                             legend: {
                                 display: true,
@@ -600,12 +820,16 @@
                                 type: 'linear',
                                 display: true,
                                 position: 'right',
+                                min: 7600,  // Set minimum closer to actual data range
+                                max: 7800,  // Set maximum closer to actual data range
                                 ticks: {
                                     color: '#a855f7',
-                                    beginAtZero: true,
                                     font: {
                                         family: 'Inter',
                                         size: 11
+                                    },
+                                    callback: function(value) {
+                                        return value.toLocaleString();  // Format large numbers with commas
                                     }
                                 },
                                 grid: {

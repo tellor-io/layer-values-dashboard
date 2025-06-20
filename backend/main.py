@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # Add chain_queries directory to path for importing reporter fetcher
 sys.path.append(str(Path(__file__).parent.parent / "chain_queries"))
 try:
-    from reporter_fetcher import ReporterFetcher
+    from chain_queries.reporter_fetcher import ReporterFetcher
     REPORTER_FETCHER_AVAILABLE = True
     logger.info("✅ Reporter fetcher module loaded successfully")
 except Exception as e:
@@ -153,49 +153,67 @@ def create_duckdb_connection():
 
 # Global DuckDB connection with improved configuration
 conn = create_duckdb_connection()
-db_lock = threading.RLock()  # Use RLock instead of Lock for better thread safety
+
+# Global flag to prevent concurrent refresh operations
+refresh_in_progress = False
+refresh_lock = threading.Lock()
+
+# Use a timeout lock to prevent indefinite blocking
+import threading
+class TimeoutRLock:
+    def __init__(self, timeout=30):
+        self._lock = threading.RLock()
+        self.timeout = timeout
+    
+    def __enter__(self):
+        acquired = self._lock.acquire(timeout=self.timeout)
+        if not acquired:
+            raise TimeoutError(f"Could not acquire database lock within {self.timeout} seconds")
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._lock.release()
+    
+    def acquire(self, timeout=None):
+        return self._lock.acquire(timeout=timeout or self.timeout)
+    
+    def release(self):
+        return self._lock.release()
+
+db_lock = TimeoutRLock(timeout=30)  # 30 second timeout to prevent indefinite blocking
 
 def get_safe_timestamp_filter():
     """
     Get a WHERE clause that excludes incomplete blocks by filtering out the most recent timestamp.
-    
-    Returns:
-        tuple: (where_clause, params) for use in SQL queries
-        - where_clause: SQL condition to exclude incomplete blocks
-        - params: List of parameters for the where clause
+    But allow showing recent data if we have 3+ distinct timestamps.
     """
     try:
         with db_lock:
-            # Get the most recent timestamp (potentially incomplete)
-            most_recent = conn.execute("""
-                SELECT MAX(TIMESTAMP) FROM layer_data
-            """).fetchone()
-            
-            if not most_recent or most_recent[0] is None:
-                # No data, no filter needed
-                return "1=1", []
-            
-            most_recent_timestamp = most_recent[0]
-            
-            # Check if we have any older timestamps
-            older_timestamps = conn.execute("""
-                SELECT COUNT(DISTINCT TIMESTAMP) 
+            # Get the most recent timestamps
+            recent_timestamps = conn.execute("""
+                SELECT DISTINCT TIMESTAMP 
                 FROM layer_data 
-                WHERE TIMESTAMP < ?
-            """, [most_recent_timestamp]).fetchone()
+                ORDER BY TIMESTAMP DESC 
+                LIMIT 3
+            """).fetchall()
             
-            if older_timestamps and older_timestamps[0] > 0:
-                # We have older data, so exclude the most recent timestamp
+            if len(recent_timestamps) >= 3:
+                # We have 3+ timestamps, exclude only the most recent
+                most_recent_timestamp = recent_timestamps[0][0]
                 logger.info(f"🛡️  Filtering out potentially incomplete block at timestamp: {most_recent_timestamp}")
                 return "TIMESTAMP < ?", [most_recent_timestamp]
+            elif len(recent_timestamps) == 2:
+                # We have 2 timestamps, show the older one
+                safe_timestamp = recent_timestamps[1][0]
+                logger.info(f"🛡️  Using second-most recent timestamp: {safe_timestamp}")
+                return "TIMESTAMP <= ?", [safe_timestamp]
             else:
                 # Only one timestamp exists, have to include it
-                logger.warning(f"⚠️  Only one timestamp block exists ({most_recent_timestamp}), including it despite potential incompleteness")
+                logger.warning(f"⚠️  Only one timestamp block exists, including it despite potential incompleteness")
                 return "1=1", []
                 
     except Exception as e:
         logger.error(f"❌ Error getting safe timestamp filter: {e}")
-        # Fall back to no filter if there's an error
         return "1=1", []
 
 def get_safe_timestamp_value():
@@ -233,68 +251,106 @@ def get_safe_timestamp_value():
         logger.error(f"❌ Error getting safe timestamp value: {e}")
         return None
 
-def calculate_power_of_aggr(source_file=None):
+def calculate_power_of_aggr(source_file=None, recent_only=False):
     """
     Calculate and update POWER_OF_AGGR for all rows.
     POWER_OF_AGGR should be the sum of all POWER values for rows with the same TIMESTAMP.
     
     Args:
         source_file: If provided, only update rows from this source file
+        recent_only: If True, only update recent timestamps (last 10 unique timestamps)
     """
     try:
         with db_lock:
-            logger.info("🔄 Calculating POWER_OF_AGGR values...")
-            
-            # Build WHERE clause for source file filtering
-            where_clause = ""
-            params = []
-            if source_file:
-                where_clause = "WHERE source_file = ?"
-                params = [source_file]
-            
-            # Update POWER_OF_AGGR for all rows by calculating the sum of POWER for each TIMESTAMP
-            update_query = f"""
-                UPDATE layer_data 
-                SET POWER_OF_AGGR = (
-                    SELECT SUM(POWER) 
-                    FROM layer_data ld2 
-                    WHERE ld2.TIMESTAMP = layer_data.TIMESTAMP
-                )
-                {where_clause}
-            """
-            
-            result = conn.execute(update_query, params)
-            affected_rows = result.rowcount if hasattr(result, 'rowcount') else 0
-            
-            # Get some statistics about the calculation
-            if source_file:
-                stats_query = """
-                    SELECT 
-                        COUNT(DISTINCT TIMESTAMP) as unique_timestamps,
-                        COUNT(*) as total_rows,
-                        MIN(POWER_OF_AGGR) as min_power_of_aggr,
-                        MAX(POWER_OF_AGGR) as max_power_of_aggr
+            if recent_only:
+                logger.info("🔄 Calculating POWER_OF_AGGR values (recent only for performance)...")
+                
+                # Get the most recent 10 unique timestamps
+                recent_timestamps = conn.execute("""
+                    SELECT DISTINCT TIMESTAMP 
                     FROM layer_data 
-                    WHERE source_file = ? AND POWER_OF_AGGR IS NOT NULL
+                    ORDER BY TIMESTAMP DESC 
+                    LIMIT 10
+                """).fetchall()
+                
+                if not recent_timestamps:
+                    logger.warning("⚠️ No timestamps found for recent calculation")
+                    return
+                
+                timestamp_list = [str(ts[0]) for ts in recent_timestamps]
+                timestamp_in_clause = "(" + ",".join(timestamp_list) + ")"
+                
+                # Update only recent timestamps
+                update_query = f"""
+                    UPDATE layer_data 
+                    SET POWER_OF_AGGR = (
+                        SELECT SUM(POWER) 
+                        FROM layer_data ld2 
+                        WHERE ld2.TIMESTAMP = layer_data.TIMESTAMP
+                    )
+                    WHERE TIMESTAMP IN {timestamp_in_clause}
                 """
-                stats = conn.execute(stats_query, [source_file]).fetchone()
+                
+                result = conn.execute(update_query)
+                affected_rows = result.rowcount if hasattr(result, 'rowcount') else 0
+                
+                logger.info(f"✅ POWER_OF_AGGR calculation complete (recent only):")
+                logger.info(f"   - Updated timestamps: {len(recent_timestamps)}")
+                logger.info(f"   - Affected rows: {affected_rows}")
+                
             else:
-                stats_query = """
-                    SELECT 
-                        COUNT(DISTINCT TIMESTAMP) as unique_timestamps,
-                        COUNT(*) as total_rows,
-                        MIN(POWER_OF_AGGR) as min_power_of_aggr,
-                        MAX(POWER_OF_AGGR) as max_power_of_aggr
-                    FROM layer_data 
-                    WHERE POWER_OF_AGGR IS NOT NULL
+                logger.info("🔄 Calculating POWER_OF_AGGR values (full calculation)...")
+                
+                # Build WHERE clause for source file filtering
+                where_clause = ""
+                params = []
+                if source_file:
+                    where_clause = "WHERE source_file = ?"
+                    params = [source_file]
+                
+                # Update POWER_OF_AGGR for all rows by calculating the sum of POWER for each TIMESTAMP
+                update_query = f"""
+                    UPDATE layer_data 
+                    SET POWER_OF_AGGR = (
+                        SELECT SUM(POWER) 
+                        FROM layer_data ld2 
+                        WHERE ld2.TIMESTAMP = layer_data.TIMESTAMP
+                    )
+                    {where_clause}
                 """
-                stats = conn.execute(stats_query).fetchone()
-            
-            if stats:
-                logger.info(f"✅ POWER_OF_AGGR calculation complete:")
-                logger.info(f"   - Unique timestamps: {safe_get(stats, 0, 0)}")
-                logger.info(f"   - Total rows updated: {safe_get(stats, 1, 0)}")
-                logger.info(f"   - POWER_OF_AGGR range: {safe_get(stats, 2, 0)} - {safe_get(stats, 3, 0)}")
+                
+                result = conn.execute(update_query, params)
+                affected_rows = result.rowcount if hasattr(result, 'rowcount') else 0
+                
+                # Get some statistics about the calculation
+                if source_file:
+                    stats_query = """
+                        SELECT 
+                            COUNT(DISTINCT TIMESTAMP) as unique_timestamps,
+                            COUNT(*) as total_rows,
+                            MIN(POWER_OF_AGGR) as min_power_of_aggr,
+                            MAX(POWER_OF_AGGR) as max_power_of_aggr
+                        FROM layer_data 
+                        WHERE source_file = ? AND POWER_OF_AGGR IS NOT NULL
+                    """
+                    stats = conn.execute(stats_query, [source_file]).fetchone()
+                else:
+                    stats_query = """
+                        SELECT 
+                            COUNT(DISTINCT TIMESTAMP) as unique_timestamps,
+                            COUNT(*) as total_rows,
+                            MIN(POWER_OF_AGGR) as min_power_of_aggr,
+                            MAX(POWER_OF_AGGR) as max_power_of_aggr
+                        FROM layer_data 
+                        WHERE POWER_OF_AGGR IS NOT NULL
+                    """
+                    stats = conn.execute(stats_query).fetchone()
+                
+                if stats:
+                    logger.info(f"✅ POWER_OF_AGGR calculation complete:")
+                    logger.info(f"   - Unique timestamps: {safe_get(stats, 0, 0)}")
+                    logger.info(f"   - Total rows updated: {safe_get(stats, 1, 0)}")
+                    logger.info(f"   - POWER_OF_AGGR range: {safe_get(stats, 2, 0)} - {safe_get(stats, 3, 0)}")
             
     except Exception as e:
         logger.error(f"❌ Error calculating POWER_OF_AGGR: {e}")
@@ -536,6 +592,9 @@ def load_active_table(table_info, is_reload=False):
                 with db_lock:
                     logger.info(f"🗑️  Removing existing data for {table_info['filename']}")
                     conn.execute("DELETE FROM layer_data WHERE source_file = ?", [table_info['filename']])
+                    # Force garbage collection and memory cleanup
+                    gc.collect()
+                    time.sleep(0.1)  # Brief pause to allow cleanup
             else:
                 logger.info(f"💾 Loading active table: {table_info['filename']} ({table_info['size'] / 1024 / 1024:.1f} MB)")
                 logger.info(f"📊 Initial memory: {initial_memory:.1f} MB")
@@ -794,6 +853,88 @@ def load_active_table(table_info, is_reload=False):
         "type": "active"
     }
 
+def load_active_table_incremental(table_info, size_change):
+    """Load only new rows from the active table instead of full reload"""
+    try:
+        logger.info(f"📈 Attempting incremental load for {table_info['filename']} (+{size_change} bytes)")
+        
+        # Get current row count for this file
+        with db_lock:
+            current_rows = safe_get(conn.execute("""
+                SELECT COUNT(*) FROM layer_data WHERE source_file = ?
+            """, [table_info['filename']]).fetchone())
+        
+        if current_rows == 0:
+            logger.info("📄 No existing rows found, falling back to full load")
+            return False
+        
+        # Read only the new rows by skipping existing ones
+        try:
+            with db_lock:
+                # Get total rows in CSV file
+                total_csv_rows = safe_get(conn.execute(f"""
+                    SELECT COUNT(*) FROM read_csv_auto('{table_info['path']}', sample_size=1000)
+                """).fetchone())
+                
+                if total_csv_rows <= current_rows:
+                    logger.info(f"📊 CSV has {total_csv_rows} rows, DB has {current_rows} rows - no new data")
+                    # Update size to prevent constant rechecking
+                    data_info["active_table_last_size"] = table_info['size']
+                    return True
+                
+                new_rows = total_csv_rows - current_rows
+                logger.info(f"📥 Loading {new_rows} new rows (CSV: {total_csv_rows}, DB: {current_rows})")
+                
+                # Load only the new rows using OFFSET
+                conn.execute(f"""
+                    INSERT OR IGNORE INTO layer_data 
+                    SELECT 
+                        REPORTER,
+                        QUERY_TYPE,
+                        QUERY_ID,
+                        AGGREGATE_METHOD,
+                        CYCLELIST,
+                        POWER,
+                        TIMESTAMP,
+                        TRUSTED_VALUE,
+                        TX_HASH,
+                        CURRENT_TIME,
+                        TIME_DIFF,
+                        VALUE,
+                        DISPUTABLE,
+                        '{table_info['filename']}' as source_file,
+                        NULL as POWER_OF_AGGR
+                    FROM (
+                        SELECT *, ROW_NUMBER() OVER () as rn
+                        FROM read_csv_auto('{table_info['path']}', header=true, ignore_errors=true)
+                    ) WHERE rn > {current_rows}
+                """)
+                
+                # Verify new rows were added
+                final_rows = safe_get(conn.execute("""
+                    SELECT COUNT(*) FROM layer_data WHERE source_file = ?
+                """, [table_info['filename']]).fetchone())
+                
+                actual_new_rows = final_rows - current_rows
+                logger.info(f"✅ Successfully added {actual_new_rows} new rows")
+                
+                # Calculate POWER_OF_AGGR for new data only
+                if actual_new_rows > 0:
+                    calculate_power_of_aggr(table_info['filename'])
+                
+                # Update tracking info
+                data_info["active_table_last_size"] = table_info['size']
+                
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Error in incremental load: {e}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Error setting up incremental load: {e}")
+        return False
+
 def load_csv_files():
     """Load CSV files with smart handling of historical vs active tables"""
     global data_info
@@ -907,10 +1048,38 @@ def periodic_reload():
     """Periodically check for updates in the active CSV file or new files"""
     consecutive_errors = 0
     max_consecutive_errors = 5
+    last_heartbeat_refresh = 0
+    HEARTBEAT_INTERVAL = 60  # Force refresh every 60 seconds
     
     while True:
         try:
             time.sleep(10)  # Check every 10 seconds
+            
+            # Add debug logging every minute (6 cycles)
+            debug_cycle = getattr(periodic_reload, 'debug_cycle', 0) + 1
+            periodic_reload.debug_cycle = debug_cycle
+            
+            # Heartbeat refresh - force recalculation periodically
+            current_time = time.time()
+            if current_time - last_heartbeat_refresh >= HEARTBEAT_INTERVAL:
+                logger.info("💓 Heartbeat refresh - updating timestamp only (safe)")
+                try:
+                    # Just update the timestamp, don't recalculate to avoid race conditions
+                    data_info["last_updated"] = current_time
+                    
+                    # Update total count safely
+                    with db_lock:
+                        actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+                        data_info["total_rows"] = actual_total
+                    
+                    logger.info(f"💓 Heartbeat refresh completed - {formatNumber(actual_total)} total rows")
+                    last_heartbeat_refresh = current_time
+                    consecutive_errors = 0
+                    continue
+                except Exception as heartbeat_error:
+                    logger.error(f"❌ Heartbeat refresh error: {heartbeat_error}")
+                    # Don't count heartbeat errors toward consecutive errors
+                    last_heartbeat_refresh = current_time  # Reset to prevent spam
             
             table_files = get_table_files()
             if not table_files:
@@ -920,6 +1089,12 @@ def periodic_reload():
             # Get the most recent table (should be active)
             newest_table = table_files[-1]
             current_active = data_info.get("active_table")
+            
+            # Debug logging every minute
+            if debug_cycle % 6 == 0:
+                logger.info(f"🔍 Periodic reload check #{debug_cycle//6}: newest={newest_table['filename']} ({newest_table['size']} bytes)")
+                if current_active:
+                    logger.info(f"   Current active: {current_active['filename']} (last_size: {data_info.get('active_table_last_size', 'unknown')})")
             
             # Check if we have a new active table (newer timestamp)
             if not current_active or newest_table['timestamp'] > current_active['timestamp']:
@@ -935,22 +1110,63 @@ def periodic_reload():
                 
                 # Add additional validation before attempting reload
                 size_change = newest_table['size'] - data_info["active_table_last_size"]
-                min_change_threshold = 1024  # Only reload if file grew by at least 1KB
+                min_change_threshold = 10000  # Only reload if file grew by at least 10KB (reasonable change)
+                
+                # Add debug logging to understand what's happening
+                logger.debug(f"📊 File size check: current={newest_table['size']}, last_processed={data_info['active_table_last_size']}, change={size_change}")
+                
+                # Handle case where last_processed is larger than current (stale data)
+                if size_change < 0:
+                    logger.info(f"🔄 File size decreased ({size_change} bytes), updating tracking to current size")
+                    data_info["active_table_last_size"] = newest_table['size']
+                    continue
                 
                 if size_change >= min_change_threshold:
+                    # Check memory before reloading
+                    process = psutil.Process()
+                    memory_mb = process.memory_info().rss / 1024 / 1024
+                    available_mb = psutil.virtual_memory().available / 1024 / 1024
+                    
+                    # Skip reload if memory is critically low or process is using too much
+                    if available_mb < 500 or memory_mb > 4000:
+                        logger.warning(f"⚠️  Skipping reload due to memory constraints (Process: {memory_mb:.0f} MB, Available: {available_mb:.0f} MB)")
+                        time.sleep(30)  # Wait before next check
+                        continue
+                    
+                    # Prevent concurrent reloads by checking if another reload is in progress
+                    if hasattr(data_info, 'reload_in_progress') and data_info.get('reload_in_progress', False):
+                        logger.info("🔄 Reload already in progress, skipping...")
+                        continue
+                    
+                    data_info['reload_in_progress'] = True
+                    
                     logger.info(f"📈 Active table {newest_table['filename']} has grown by {size_change} bytes, reloading...")
-                    result = load_active_table(newest_table, is_reload=True)
-                    if result:
-                        # Update total count with thread safety
-                        with db_lock:
-                            actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
-                        data_info["total_rows"] = actual_total
-                        data_info["last_updated"] = time.time()
-                        logger.info(f"🔄 Reloaded active table, database now has {formatNumber(actual_total)} rows")
-                        consecutive_errors = 0  # Reset error count on success
-                    else:
-                        logger.warning(f"⚠️  Failed to reload active table {newest_table['filename']}, will retry on next check")
-                        # Don't count this as an error since load_active_table already has retry logic
+                    logger.info(f"💾 Memory before reload: {memory_mb:.1f} MB used, {available_mb:.0f} MB available")
+                    
+                    try:
+                        # Force garbage collection before reload
+                        gc.collect()
+                        
+                        # Try incremental load instead of full reload for better performance
+                        result = load_active_table_incremental(newest_table, size_change)
+                        if not result:
+                            # Fall back to full reload if incremental fails
+                            logger.info("🔄 Incremental load failed, falling back to full reload...")
+                            result = load_active_table(newest_table, is_reload=True)
+                        
+                        if result:
+                            # Update total count with thread safety
+                            with db_lock:
+                                actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+                            data_info["total_rows"] = actual_total
+                            data_info["last_updated"] = time.time()
+                            logger.info(f"🔄 Reloaded active table, database now has {formatNumber(actual_total)} rows")
+                            consecutive_errors = 0  # Reset error count on success
+                        else:
+                            logger.warning(f"⚠️  Failed to reload active table {newest_table['filename']}, will retry on next check")
+                            # Don't count this as an error since load_active_table already has retry logic
+                    finally:
+                        data_info['reload_in_progress'] = False
                 else:
                     logger.debug(f"📝 Active table size change too small ({size_change} bytes), skipping reload")
                     # Update the size anyway to prevent constant small change detection
@@ -984,7 +1200,39 @@ async def startup_event():
     # Start periodic reload thread
     reload_thread = threading.Thread(target=periodic_reload, daemon=True)
     reload_thread.start()
+    logger.info("🔄 Started periodic reload thread with memory safety")
     
+    # Create reporters table first to ensure API endpoints work
+    logger.info("🏗️  Creating reporters table schema...")
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS reporters (
+                address VARCHAR PRIMARY KEY,
+                moniker VARCHAR,
+                commission_rate VARCHAR,
+                jailed BOOLEAN DEFAULT FALSE,
+                jailed_until TIMESTAMP,
+                last_updated TIMESTAMP,
+                min_tokens_required BIGINT,
+                power INTEGER,
+                fetched_at TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Create indexes for better performance
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reporters_moniker ON reporters(moniker)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reporters_power ON reporters(power)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reporters_jailed ON reporters(jailed)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reporters_fetched_at ON reporters(fetched_at)")
+        
+        logger.info("✅ Reporters table schema created")
+    except Exception as e:
+        logger.error(f"❌ Failed to create reporters table: {e}")
+
+    # Note: Maximal power data is now stored in CSV file, no database table needed
+    logger.info("🔋 Maximal power tracking will use CSV file storage")
+
     # Initialize and start reporter fetcher if available
     if REPORTER_FETCHER_AVAILABLE:
         try:
@@ -1003,13 +1251,15 @@ async def startup_event():
                 success = reporter_fetcher.fetch_and_store(conn)
                 if success:
                     logger.info("✅ Initial reporter data fetch completed")
-                    
-                    # Check for unknown reporters and create placeholders
-                    unknown_reporters = reporter_fetcher.get_unknown_reporters(conn)
-                    if unknown_reporters:
-                        reporter_fetcher.create_placeholder_reporters(unknown_reporters, conn)
                 else:
-                    logger.warning("⚠️  Initial reporter data fetch failed")
+                    logger.warning("⚠️  Initial reporter data fetch failed - will retry periodically")
+                
+                # Initialize historical maximal power data (7 days back)
+                try:
+                    reporter_fetcher.initialize_historical_maximal_power(conn, days_back=7)
+                    logger.info("🔋 Maximal power historical data initialization completed")
+                except Exception as e:
+                    logger.warning(f"⚠️  Could not initialize historical maximal power data: {e}")
                 
                 # Start periodic updates
                 reporter_fetcher.start_periodic_updates(conn)
@@ -1097,6 +1347,7 @@ async def get_info():
 
 @dashboard_app.get("/api/data")
 async def get_data(
+    request: Request,
     limit: int = Query(100, ge=1, le=1000),  # Reduced max limit
     offset: int = Query(0, ge=0),
     reporter: Optional[str] = None,
@@ -1109,6 +1360,21 @@ async def get_data(
 ):
     """Get paginated data with optional filters - defaults to most recent 1000 records on first load"""
     try:
+        # Check if force refresh is requested via cache buster
+        cache_buster = request.query_params.get('_t')
+        if cache_buster:
+            global refresh_in_progress
+            with refresh_lock:
+                if not refresh_in_progress:
+                    refresh_in_progress = True
+                    try:
+                        logger.info("🔄 Force refresh triggered by cache buster in data")
+                        calculate_power_of_aggr(recent_only=True)  # Only update recent data for speed
+                        data_info["last_updated"] = time.time()
+                    finally:
+                        refresh_in_progress = False
+                else:
+                    logger.info("⏭️ Skipping refresh - already in progress")
         # Build WHERE clause
         where_conditions = []
         params = {}
@@ -1265,10 +1531,70 @@ async def get_data(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@dashboard_app.post("/api/refresh")
+async def force_refresh():
+    """Force refresh all data - recalculates everything"""
+    try:
+        global refresh_in_progress
+        with refresh_lock:
+            if refresh_in_progress:
+                return {
+                    "status": "skipped", 
+                    "message": "Refresh already in progress",
+                    "last_updated": data_info.get("last_updated")
+                }
+            
+            refresh_in_progress = True
+            
+        try:
+            logger.info("🔄 Force refresh requested via API")
+            
+            # Force recalculation of POWER_OF_AGGR (recent only for speed)
+            calculate_power_of_aggr(recent_only=True)
+            
+            # Update last_updated timestamp
+            data_info["last_updated"] = time.time()
+        finally:
+            refresh_in_progress = False
+        
+        # Get fresh counts
+        with db_lock:
+            actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+            data_info["total_rows"] = actual_total
+        
+        logger.info(f"✅ Force refresh completed - {formatNumber(actual_total)} total rows")
+        
+        return {
+            "status": "success", 
+            "message": "Data refreshed successfully",
+            "total_rows": actual_total,
+            "last_updated": data_info["last_updated"]
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Force refresh error: {e}")
+        raise HTTPException(status_code=500, detail=f"Force refresh failed: {str(e)}")
+
 @dashboard_app.get("/api/stats")
-async def get_stats():
+async def get_stats(request: Request):
     """Get statistical information about the data"""
     try:
+        # Check if force refresh is requested via cache buster
+        cache_buster = request.query_params.get('_t')
+        if cache_buster:
+            global refresh_in_progress
+            with refresh_lock:
+                if not refresh_in_progress:
+                    refresh_in_progress = True
+                    try:
+                        logger.info("🔄 Force refresh triggered by cache buster in stats")
+                        calculate_power_of_aggr(recent_only=True)  # Only update recent data for speed
+                        data_info["last_updated"] = time.time()
+                    finally:
+                        refresh_in_progress = False
+                else:
+                    logger.info("⏭️ Skipping refresh - already in progress")
+        
         stats = {}
         
         # Use thread-safe database access
@@ -1330,31 +1656,36 @@ async def get_stats():
                 "median": safe_get(value_stats, 2, 0)
             }
             
-            # Total reporter power using safe timestamp approach to avoid incomplete blocks
-            target_timestamp = get_safe_timestamp_value()
+            # Active reporter calculation - unique reporters who reported in last 24h
+            hours_24_ms = 24 * 60 * 60 * 1000
+            current_time_ms = int(time.time() * 1000)
+            start_time_24h = current_time_ms - hours_24_ms
             
-            if target_timestamp:
-                recent_timestamp_power = conn.execute("""
-                    SELECT 
-                        TIMESTAMP,
-                        SUM(POWER) as total_power,
-                        COUNT(*) as reporter_count
-                    FROM layer_data
-                    WHERE TIMESTAMP = ?
-                    GROUP BY TIMESTAMP
-                """, [target_timestamp]).fetchone()
-                logger.info(f"📈 Stats using safe timestamp: {target_timestamp}")
-            else:
-                recent_timestamp_power = None
+            # Get power of reporters who have been active in last 24h (from registry, not layer_data)
+            active_reporters_power = conn.execute("""
+                SELECT 
+                    COUNT(DISTINCT r.address) as active_reporter_count,
+                    COALESCE(SUM(r.power), 0) as total_active_power
+                FROM reporters r
+                WHERE r.address IN (
+                    SELECT DISTINCT REPORTER 
+                    FROM layer_data 
+                    WHERE CURRENT_TIME >= ?
+                )
+            """, [start_time_24h]).fetchone()
             
-            if recent_timestamp_power:
-                stats["total_reporter_power"] = recent_timestamp_power[1]
-                stats["recent_timestamp"] = recent_timestamp_power[0]
-                stats["recent_reporter_count"] = recent_timestamp_power[2]
+            if active_reporters_power:
+                stats["active_reporter_power"] = safe_get(active_reporters_power, 1, 0)
+                stats["active_reporter_count"] = safe_get(active_reporters_power, 0, 0)
+                logger.info(f"📈 Active reporters in 24h: {stats['active_reporter_count']} with total power: {stats['active_reporter_power']}")
             else:
-                stats["total_reporter_power"] = 0
-                stats["recent_timestamp"] = None
-                stats["recent_reporter_count"] = 0
+                stats["active_reporter_power"] = 0
+                stats["active_reporter_count"] = 0
+            
+            # Legacy field for compatibility (never use timestamp-based calculation from layer_data)
+            stats["total_reporter_power"] = None  # Signal frontend to not use this
+            stats["recent_timestamp"] = None
+            stats["recent_reporter_count"] = 0
             
             # Recent activity (last hour)
             recent_count = conn.execute("""
@@ -2667,6 +2998,52 @@ async def get_reporters_activity_analytics(
                 ORDER BY bs.bucket_id
             """, [num_buckets, start_time, interval_ms, start_time, current_time_ms] + safe_params).fetchall()
             
+            # Get maximal power data for the same timeframe from CSV
+            maximal_power_data = []
+            try:
+                if reporter_fetcher and reporter_fetcher.maximal_power_tracker:
+                    # Load maximal power data from CSV file
+                    csv_data = reporter_fetcher.maximal_power_tracker.get_all_maximal_power_data()
+                    
+                    # Filter data to our timeframe and convert to timestamp milliseconds
+                    filtered_data = []
+                    for row in csv_data:
+                        timestamp_ms = int(row['timestamp'].timestamp() * 1000)
+                        if start_time <= timestamp_ms <= current_time_ms:
+                            filtered_data.append({
+                                'timestamp_ms': timestamp_ms,
+                                'maximal_power': row['maximal_power']
+                            })
+                    
+                    # Create a lookup map for maximal power by bucket
+                    maximal_power_map = {}
+                    for row in filtered_data:
+                        timestamp_ms = row['timestamp_ms']
+                        power = row['maximal_power'] or 0
+                        bucket_id = int((timestamp_ms - start_time) / interval_ms)
+                        if 0 <= bucket_id < num_buckets:
+                            maximal_power_map[bucket_id] = power
+                    
+                    # Create maximal power array with interpolation for missing values
+                    last_known_power = 0
+                    for i in range(num_buckets):
+                        if i in maximal_power_map:
+                            last_known_power = maximal_power_map[i]
+                            maximal_power_data.append(last_known_power)
+                        else:
+                            # Use last known value for missing data points
+                            maximal_power_data.append(last_known_power)
+                    
+                    logger.info(f"🔋 Found {len(filtered_data)} maximal power snapshots from CSV for {timeframe}")
+                else:
+                    logger.warning("⚠️  Maximal power tracker not available")
+                    maximal_power_data = [0] * num_buckets
+                
+            except Exception as e:
+                logger.warning(f"⚠️  Could not fetch maximal power data from CSV: {e}")
+                # Fill with zeros if maximal power data is not available
+                maximal_power_data = [0] * num_buckets
+            
             # Create arrays efficiently using list comprehension
             total_reports_data = [row[2] for row in results]
             active_reporters_data = [row[1] for row in results]
@@ -2694,7 +3071,9 @@ async def get_reporters_activity_analytics(
                 "time_labels": time_labels,
                 "total_reports": total_reports_data,
                 "active_reporters": active_reporters_data,
-                "representative_power_of_aggr": representative_power_of_aggr_data
+                "representative_power_of_aggr": representative_power_of_aggr_data,
+                "maximal_power_network": maximal_power_data,
+                "has_maximal_power_data": any(power > 0 for power in maximal_power_data)
             }
             
             # Return with cache headers
@@ -2818,6 +3197,78 @@ async def get_reporter_fetcher_status():
             "available": False,
             "reason": f"Error: {str(e)}"
         }
+
+# Duplicate force_refresh function removed - using the one defined earlier
+
+@dashboard_app.post("/api/trigger-historical-maximal-power")
+async def trigger_historical_maximal_power():
+    """Manually trigger historical maximal power data collection"""
+    try:
+        global reporter_fetcher
+        if not REPORTER_FETCHER_AVAILABLE or not reporter_fetcher:
+            raise HTTPException(status_code=503, detail="Reporter fetcher service not available")
+        
+        if not reporter_fetcher.maximal_power_tracker:
+            raise HTTPException(status_code=503, detail="Maximal power tracker not initialized")
+        
+        logger.info("🔋 Manual historical maximal power collection triggered via API")
+        
+        # Run the historical collection in background
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def collect_historical():
+            try:
+                if not reporter_fetcher or not reporter_fetcher.maximal_power_tracker:
+                    raise Exception("Maximal power tracker not available")
+                
+                tracker = reporter_fetcher.maximal_power_tracker
+                
+                # Get current block info
+                height, timestamp = tracker.get_current_height_and_timestamp()
+                logger.info(f"📊 Collecting historical data from height {height}")
+                
+                # Use the initialize_csv_file method for historical data collection
+                # This will backfill missing heights ending in 0000
+                tracker.initialize_csv_file(days_back=15)  # Collect more historical data
+                
+                # Get the collected data to return count
+                all_data = tracker.get_all_maximal_power_data()
+                historical_count = len([d for d in all_data if d.get('sample_type') == 'historical'])
+                
+                logger.info(f"✅ Historical collection complete: {historical_count} data points")
+                return historical_count
+                
+            except Exception as e:
+                logger.error(f"❌ Historical collection failed: {e}")
+                raise
+        
+        # Execute collection
+        executor = ThreadPoolExecutor(max_workers=1)
+        loop = asyncio.get_event_loop()
+        
+        try:
+            # Wait up to 60 seconds for collection
+            data_points = await asyncio.wait_for(
+                loop.run_in_executor(executor, collect_historical), 
+                timeout=60.0
+            )
+            
+            return JSONResponse(content={
+                "status": "success", 
+                "message": f"Historical maximal power collection completed",
+                "data_points_collected": data_points
+            })
+            
+        except asyncio.TimeoutError:
+            return JSONResponse(content={
+                "status": "timeout",
+                "message": "Collection started but may still be running in background"
+            })
+        
+    except Exception as e:
+        logger.error(f"❌ Manual historical collection failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Historical collection failed: {str(e)}")
 
 # Mount static files for dashboard
 dashboard_app.mount("/static", StaticFiles(directory="../frontend"), name="static")
