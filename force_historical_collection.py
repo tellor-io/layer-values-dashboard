@@ -21,7 +21,7 @@ import requests
 def test_dashboard_connection():
     """Test if dashboard is accessible"""
     try:
-        response = requests.get("http://localhost:8000/dashboard/api/info", timeout=5)
+        response = requests.get("http://localhost:8000/dashboard-mainnet/api/info", timeout=5)
         return response.status_code == 200
     except:
         return False
@@ -30,7 +30,7 @@ def test_maximal_power_api():
     """Test current API response"""
     print("\n🔍 Testing Current API Response...")
     try:
-        response = requests.get("http://localhost:8000/dashboard/api/reporters-activity-analytics?timeframe=24h", timeout=10)
+        response = requests.get("http://localhost:8000/dashboard-mainnet/api/reporters-activity-analytics?timeframe=24h", timeout=10)
         if response.status_code == 200:
             data = response.json()
             values = data['maximal_power_network']
@@ -49,7 +49,7 @@ def force_collection_via_api():
     print("\n🔋 Forcing Historical Collection via API...")
     try:
         response = requests.post(
-            "http://localhost:8000/dashboard/api/trigger-historical-maximal-power",
+            "http://localhost:8000/dashboard-mainnet/api/trigger-historical-maximal-power",
             headers={"Content-Type": "application/json"},
             timeout=120
         )
@@ -74,7 +74,7 @@ def direct_database_collection():
         # Initialize tracker with fixed path
         tracker = MaximalPowerTracker(
             binary_path='./layerd',
-            rpc_url='https://node-palmito.tellorlayer.com/rpc/'
+            rpc_url='http://localhost:26758'
         )
         
         # Connect to main database (should be the same one the dashboard uses)

@@ -57,7 +57,7 @@ let isLoading = false;
 
 // Configuration
 const RECORDS_PER_PAGE = 100;
-const API_BASE = '/dashboard';
+const API_BASE = '/dashboard-mainnet';
 
 // DOM elements
 const elements = {
@@ -470,7 +470,7 @@ const initializePage = () => {
         performSearch(query, page);
     } else {
         // Redirect to dashboard if no search query
-        window.location.href = '/dashboard';
+        window.location.href = '/dashboard-mainnet';
     }
 };
 

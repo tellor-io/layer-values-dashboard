@@ -30,8 +30,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add chain_queries directory to path for importing reporter fetcher
-sys.path.append(str(Path(__file__).parent.parent / "chain_queries"))
+# Add parent directory to path for importing chain_queries package
+sys.path.append(str(Path(__file__).parent.parent))
 try:
     from chain_queries.reporter_fetcher import ReporterFetcher
     REPORTER_FETCHER_AVAILABLE = True
@@ -1289,7 +1289,7 @@ async def shutdown_event():
 @app.get("/")
 async def root_redirect():
     """Redirect root to dashboard"""
-    return {"message": "Layer Values Dashboard API", "dashboard_url": "/dashboard/"}
+    return {"message": "Layer Values Dashboard API", "dashboard_url": "/dashboard-mainnet/"}
 
 # Dashboard sub-application routes
 @dashboard_app.get("/")
@@ -1303,9 +1303,9 @@ async def serve_frontend():
     with open(html_path, 'r', encoding='utf-8') as f:
         html_content = f.read()
     
-    # Update static asset paths to be relative to /dashboard/
-    html_content = html_content.replace('href="./static/', 'href="/dashboard/static/')
-    html_content = html_content.replace('src="./static/', 'src="/dashboard/static/')
+    # Update static asset paths to be relative to /dashboard-mainnet/
+    html_content = html_content.replace('href="./static/', 'href="/dashboard-mainnet/static/')
+    html_content = html_content.replace('src="./static/', 'src="/dashboard-mainnet/static/')
     
     return HTMLResponse(content=html_content)
 
@@ -1320,9 +1320,9 @@ async def serve_reporters_page():
     with open(html_path, 'r', encoding='utf-8') as f:
         html_content = f.read()
     
-    # Update static asset paths to be relative to /dashboard/
-    html_content = html_content.replace('href="./static/', 'href="/dashboard/static/')
-    html_content = html_content.replace('src="./static/', 'src="/dashboard/static/')
+    # Update static asset paths to be relative to /dashboard-mainnet/
+    html_content = html_content.replace('href="./static/', 'href="/dashboard-mainnet/static/')
+    html_content = html_content.replace('src="./static/', 'src="/dashboard-mainnet/static/')
     
     return HTMLResponse(content=html_content)
 
@@ -3274,7 +3274,7 @@ async def trigger_historical_maximal_power():
 dashboard_app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 
 # Mount dashboard sub-application
-app.mount("/dashboard", dashboard_app)
+app.mount("/dashboard-mainnet", dashboard_app)
 
 # Add after existing middleware
 @app.middleware("http")

@@ -34,7 +34,7 @@ const MAX_RETRIES = IS_CELLULAR ? 1 : (IS_MOBILE ? 2 : 3);
 
 // Configuration with mobile detection
 const RECORDS_PER_PAGE = 100;
-const API_BASE = '/dashboard';
+const API_BASE = '/dashboard-mainnet';
 
 // DOM elements
 const elements = {
@@ -1954,7 +1954,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.headerSearchBtn.addEventListener('click', () => {
         const query = elements.headerSearchInput.value.trim();
         if (query) {
-            window.location.href = `/dashboard/search?q=${encodeURIComponent(query)}`;
+            window.location.href = `/dashboard-mainnet/search?q=${encodeURIComponent(query)}`;
         }
     });
     
@@ -1962,7 +1962,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Enter') {
             const query = elements.headerSearchInput.value.trim();
             if (query) {
-                window.location.href = `/dashboard/search?q=${encodeURIComponent(query)}`;
+                window.location.href = `/dashboard-mainnet/search?q=${encodeURIComponent(query)}`;
             }
         }
     });

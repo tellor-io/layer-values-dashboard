@@ -28,7 +28,7 @@ uv venv && source .venv/bin/activate
 uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-values-monitor/logs/ --port 8000
 ```
 
-4. **Open your browser** and go to: `http://localhost:8000/dashboard/` (or your custom port)
+4. **Open your browser** and go to: `http://localhost:8000/dashboard-mainnet/` (or your custom port)
 
 ## Usage
 
@@ -40,13 +40,13 @@ uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-val
 
 ### API Endpoints
 
-The backend provides RESTful API endpoints under `/dashboard/api/`:
+The backend provides RESTful API endpoints under `/dashboard-mainnet/api/`:
 
-- `GET /dashboard/api/info` - Data source information
-- `GET /dashboard/api/stats` - Statistical overview
-- `GET /dashboard/api/data` - Paginated data with filtering
-- `GET /dashboard/api/search` - Full-text search
-- `GET /dashboard/api/analytics` - Analytics data for different timeframes
+- `GET /dashboard-mainnet/api/info` - Data source information
+- `GET /dashboard-mainnet/api/stats` - Statistical overview
+- `GET /dashboard-mainnet/api/data` - Paginated data with filtering
+- `GET /dashboard-mainnet/api/search` - Full-text search
+- `GET /dashboard-mainnet/api/analytics` - Analytics data for different timeframes
 
 Visit `http://localhost:8000/docs` for interactive API documentation.
 

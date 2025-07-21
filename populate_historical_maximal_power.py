@@ -22,7 +22,7 @@ def get_running_database_info():
     """Get information about the running dashboard database"""
     try:
         # Test if dashboard is running
-        response = requests.get("http://localhost:8000/dashboard/api/reporters-activity-analytics?timeframe=24h", timeout=10)
+        response = requests.get("http://localhost:8000/dashboard-mainnet/api/reporters-activity-analytics?timeframe=24h", timeout=10)
         if response.status_code == 200:
             data = response.json()
             current_data_points = sum(1 for v in data['maximal_power_network'] if v > 0)

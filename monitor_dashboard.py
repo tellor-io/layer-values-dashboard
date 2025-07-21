@@ -15,7 +15,7 @@ def check_dashboard_health():
     """Check if dashboard is responding and healthy"""
     try:
         # Test main endpoint
-        response = requests.get("http://localhost:8000/dashboard/api/info", timeout=10)
+        response = requests.get("http://localhost:8000/dashboard-mainnet/api/info", timeout=10)
         if response.status_code == 200:
             data = response.json()
             return True, data.get('total_rows', 0)
