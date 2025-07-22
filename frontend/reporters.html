@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tellor Reporters - Layer Values Dashboard</title>
+    <link rel="stylesheet" href="./static/style.css">
+    <!-- Add mobile viewport and error handling -->
+    <style>
+        /* Basic mobile fallback styles if CSS fails to load */
+        @media (max-width: 768px) {
+            body { font-size: 14px; padding: 10px; }
+            .main { padding: 1rem; }
+            .stats-grid { grid-template-columns: 1fr; }  
+        }
+        /* Simple loading indicator for mobile */
+        .mobile-debug {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: red;
+            color: white;
+            padding: 5px;
+            z-index: 9999;
+            font-size: 12px;
+            display: none;
+        }
+        @media (max-width: 768px) {
+            .mobile-debug { display: block; }
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+</head>
+<body>
+    <div class="mobile-debug" id="mobile-debug">📱 Mobile Mode</div>
+    <div class="app">
+        <!-- Main Content -->
+        <main class="main">
+
+            <!-- Reporter Activity Chart -->
+            <div class="analytics-section">
+                <div class="analytics-controls">
+                    <button class="analytics-btn active" data-timeframe="24h">
+                        <i class="fas fa-clock"></i> 24h
+                    </button>
+                    <button class="analytics-btn" data-timeframe="7d">
+                        <i class="fas fa-calendar-week"></i> 7d
+                    </button>
+                    <button class="analytics-btn" data-timeframe="30d">
+                        <i class="fas fa-calendar"></i> 30d
+                    </button>
+                </div>
+                <div class="chart-container">
+                    <canvas id="reporter-activity-chart"></canvas>
+                </div>
+                <div class="analytics-header">
+                    <h2>
+                        <i class="fas fa-chart-line"></i>
+                        Tellor Reporter Activity
+                    </h2>
+                </div>
+                <div class="analytics-loading" id="reporter-activity-loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <div class="loading-text">Loading reporter activity...</div>
+                </div>
+            </div>
+
+            <!-- Stats Dashboard -->
+            <div class="stats-dashboard">
+                <div class="stats-grid" id="summaryCards">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="totalReportersCard">-</div>
+                            <div class="stat-title">Total Reporters</div>
+                            <div class="stat-subtitle">All registered reporters</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-bolt"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="activeReporters">-</div>
+                            <div class="stat-title">Active Reporters</div>
+                            <div class="stat-subtitle">Active in last 24h</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-ban"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="jailedReporters">-</div>
+                            <div class="stat-title">Jailed Reporters</div>
+                            <div class="stat-subtitle">Currently jailed</div>
+                        </div>
+                    </div>
+
+
+                </div>
+            </div>
+
+
+
+            <!-- Data Section -->
+            <div class="data-section">
+                <div class="data-header">
+                    <div class="data-header-left">
+                        <h2>
+                            <i class="fas fa-table"></i>
+                            Reporter Details
+                        </h2>
+                        <div class="header-stats">
+                            <div class="stat-item">
+                                <span class="stat-label">Showing</span>
+                                <span class="stat-value" id="showing-info">0 of 0 reporters</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="data-controls">
+                        <a href="/dashboard-mainnet/" class="btn btn-secondary">
+                            <i class="fas fa-arrow-left"></i> Back to Dashboard
+                        </a>
+                        <button id="refresh-data" class="btn btn-secondary">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <table class="data-table" id="reportersTable">
+                        <thead>
+                            <tr>
+                                <th>Reporter</th>
+                                <th>Power</th>
+                                <th>Commission</th>
+                                <th>Jailed Status</th>
+                                <th>Active Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reportersTableBody">
+                            <tr>
+                                <td colspan="6" class="text-center">
+                                    <div class="loading">
+                                        <i class="fas fa-spinner fa-spin"></i> Loading reporters...
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="pagination">
+                    <button id="prev-page" class="btn btn-secondary" disabled>
+                        <i class="fas fa-chevron-left"></i> Previous
+                    </button>
+                    <div class="page-info">
+                        <span>Page <span id="current-page">1</span> of <span id="total-pages">1</span></span>
+                    </div>
+                    <button id="next-page" class="btn btn-secondary">
+                        Next <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Loading overlay -->
+        <div class="loading-overlay hidden" id="loading-overlay">
+            <div class="spinner"></div>
+            <div class="loading-text">Loading reporter data...</div>
+        </div>
+    </div>
+
+    <script>
+        // Mobile detection
+        const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+        // Mobile debugging function
+        function mobileLog(message) {
+            console.log(`📱 Mobile: ${message}`);
+            if (IS_MOBILE) {
+                const debugEl = document.getElementById('mobile-debug');
+                if (debugEl) {
+                    debugEl.textContent = message;
+                    debugEl.style.background = 'green';
+                }
+            }
+        }
+
+        // Window error handler for mobile debugging
+        window.onerror = function(msg, url, line, col, error) {
+            console.error('Global error:', { msg, url, line, col, error });
+            if (IS_MOBILE) {
+                const debugEl = document.getElementById('mobile-debug');
+                if (debugEl) {
+                    debugEl.textContent = `Error: ${msg}`;
+                    debugEl.style.background = 'red';
+                }
+            }
+            return false;
+        };
+
+        // Initial mobile debug
+        if (IS_MOBILE) {
+            mobileLog('Mobile detected, initializing...');
+        }
+
+        // Mobile-optimized fetch with simpler error handling
+        async function safeFetch(url, options = {}) {
+            try {
+                if (IS_MOBILE) {
+                    mobileLog(`Fetching: ${url}`);
+                }
+                // Shorter timeout for mobile
+                const timeoutMs = IS_MOBILE ? 8000 : 15000;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+                
+                const response = await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                if (IS_MOBILE) {
+                    mobileLog(`✓ Success: ${response.status}`);
+                }
+                return response;
+            } catch (error) {
+                console.error('Fetch error:', error);
+                if (IS_MOBILE) {
+                    mobileLog(`✗ Error: ${error.message}`);
+                }
+                throw error;
+            }
+        }
+
+        // Provide AbortController polyfill fallback
+        if (typeof AbortController === 'undefined') {
+            mobileLog('AbortController not supported, using fallback...');
+            window.AbortController = function() {
+                return {
+                    abort: () => {},
+                    signal: undefined
+                };
+            };
+        }
+
+        // Provide simple URLSearchParams polyfill
+        if (typeof URLSearchParams === 'undefined') {
+            mobileLog('URLSearchParams not supported, polyfilling...');
+            window.URLSearchParams = function(init) {
+                this.params = [];
+                if (init && typeof init === 'object') {
+                    for (const key in init) {
+                        this.params.push(`${encodeURIComponent(key)}=${encodeURIComponent(init[key])}`);
+                    }
+                } else if (typeof init === 'string') {
+                    this.params = [init];
+                }
+                this.toString = () => this.params.join('&');
+            };
+        }
+
+        // Provide fetch polyfill using XMLHttpRequest if not supported
+        if (typeof window.fetch === 'undefined') {
+            mobileLog('fetch API not supported, polyfilling...');
+            window.fetch = function(url, options = {}) {
+                return new Promise((resolve, reject) => {
+                    const request = new XMLHttpRequest();
+                    request.open(options.method || 'GET', url, true);
+                    for (const header in (options.headers || {})) {
+                        request.setRequestHeader(header, options.headers[header]);
+                    }
+                    request.onload = () => {
+                        const responseHeaders = request.getAllResponseHeaders();
+                        const body = 'response' in request ? request.response : request.responseText;
+                        resolve({
+                            ok: request.status >= 200 && request.status < 300,
+                            status: request.status,
+                            statusText: request.statusText,
+                            headers: responseHeaders,
+                            text: () => Promise.resolve(body),
+                            json: () => {
+                                try { return Promise.resolve(JSON.parse(body)); }
+                                catch(e) { return Promise.reject(e); }
+                            }
+                        });
+                    };
+                    request.onerror = () => reject(new TypeError('Network request failed'));
+                    request.send(options.body || null);
+                });
+            };
+        }
+
+        class ReportersApp {
+            constructor() {
+                this.currentPage = 0;
+                // Smaller page size for mobile devices for faster loading
+                this.pageSize = IS_MOBILE ? 60 : 110;
+                this.totalReporters = 0;
+                this.maxPower = 0;
+                this.searchTimeout = null;
+                this.reporterActivityChart = null;
+                this.currentTimeframe = '24h';
+                this.isLoadingAnalytics = false;
+                
+                // Add mobile-specific initialization
+                if (IS_MOBILE) {
+                    console.log('📱 Mobile device detected, optimizing...');
+                    // Disable smooth scrolling on mobile
+                    document.documentElement.style.scrollBehavior = 'auto';
+                }
+                
+                this.initializeEventListeners();
+                this.loadInitialData();
+            }
+            
+            async loadInitialData() {
+                this.showLoadingOverlay();
+                try {
+                    if (IS_MOBILE) {
+                        // Load components sequentially on mobile to reduce load
+                        await this.loadSummary();
+                        await this.loadReporters();
+                        await this.loadReporterActivityAnalytics(this.currentTimeframe);
+                    } else {
+                        // Load in parallel on desktop
+                        await Promise.all([
+                            this.loadReporterActivityAnalytics(this.currentTimeframe),
+                            this.loadSummary(),
+                            this.loadReporters()
+                        ]);
+                    }
+                } finally {
+                    this.hideLoadingOverlay();
+                }
+            }
+            
+            initializeEventListeners() {
+                const refreshBtn = document.getElementById('refresh-data');
+                const prevBtn = document.getElementById('prev-page');
+                const nextBtn = document.getElementById('next-page');
+                
+                // Timeframe button listeners
+                const timeframeButtons = document.querySelectorAll('.analytics-btn');
+                timeframeButtons.forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const timeframe = btn.dataset.timeframe;
+                        if (timeframe !== this.currentTimeframe && !this.isLoadingAnalytics) {
+                            // Update active button
+                            timeframeButtons.forEach(b => b.classList.remove('active'));
+                            btn.classList.add('active');
+                            
+                            // Update current timeframe and reload chart
+                            this.currentTimeframe = timeframe;
+                            await this.loadReporterActivityAnalytics(timeframe);
+                        }
+                    });
+                });
+                
+                refreshBtn.addEventListener('click', async () => {
+                    this.showLoadingOverlay();
+                    try {
+                        await this.loadReporterActivityAnalytics(this.currentTimeframe);
+                        await this.loadSummary();
+                        await this.loadReporters();
+                    } finally {
+                        this.hideLoadingOverlay();
+                    }
+                });
+                
+                prevBtn.addEventListener('click', () => {
+                    if (this.currentPage > 0) {
+                        this.currentPage--;
+                        this.loadReporters();
+                    }
+                });
+                
+                nextBtn.addEventListener('click', () => {
+                    const totalPages = Math.ceil(this.totalReporters / this.pageSize);
+                    if (this.currentPage < totalPages - 1) {
+                        this.currentPage++;
+                        this.loadReporters();
+                    }
+                });
+            }
+            
+            updateTimestamp() {
+                // No longer needed since header was removed
+            }
+            
+            showLoadingOverlay() {
+                const overlay = document.getElementById('loading-overlay');
+                overlay.classList.remove('hidden');
+            }
+            
+            hideLoadingOverlay() {
+                const overlay = document.getElementById('loading-overlay');
+                overlay.classList.add('hidden');
+            }
+            
+            async loadSummary() {
+                try {
+                    const response = await safeFetch('/dashboard-mainnet/api/reporters-summary');
+                    const data = await response.json();
+                    
+                    // Update stat cards
+                    document.getElementById('totalReportersCard').textContent = data.summary.total_reporters.toLocaleString();
+                    document.getElementById('activeReporters').textContent = data.summary.active_reporters.toLocaleString();
+                    document.getElementById('jailedReporters').textContent = data.summary.jailed_reporters.toLocaleString();
+                    
+                    this.maxPower = data.summary.max_power;
+                } catch (error) {
+                    console.error('Error loading summary:', error);
+                }
+            }
+            
+            async loadReporters() {
+                const tableBody = document.getElementById('reportersTableBody');
+                const showingInfo = document.getElementById('showing-info');
+                
+                // Show loading state
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="text-center">
+                            <div class="loading">
+                                <i class="fas fa-spinner fa-spin"></i> Loading reporters...
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                
+                try {
+                    const params = new URLSearchParams({
+                        limit: this.pageSize,
+                        offset: this.currentPage * this.pageSize,
+                        sort_by: 'power'
+                    });
+                    
+                    const response = await safeFetch(`/dashboard-mainnet/api/reporters?${params}`);
+                    const data = await response.json();
+                    
+                    this.totalReporters = data.total;
+                    this.renderReporters(data.reporters);
+                    this.updatePaginationControls();
+                    
+                    // Update showing info
+                    const start = this.currentPage * this.pageSize + 1;
+                    const end = Math.min((this.currentPage + 1) * this.pageSize, this.totalReporters);
+                    showingInfo.textContent = `${start}-${end} of ${this.totalReporters.toLocaleString()} reporters`;
+                    
+                } catch (error) {
+                    console.error('Error loading reporters:', error);
+                    tableBody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="text-center">
+                                <div class="error">
+                                    <i class="fas fa-exclamation-triangle"></i> Error loading reporters. Please try again.
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }
+            }
+            
+            renderReporters(reporters) {
+                const tableBody = document.getElementById('reportersTableBody');
+                
+                if (reporters.length === 0) {
+                    tableBody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="text-center">
+                                <div class="loading">No reporters found.</div>
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+                
+                const html = reporters.map(reporter => {
+                    const powerPercent = this.maxPower > 0 ? (reporter.power / this.maxPower) * 100 : 0;
+                    const statusClass = reporter.jailed ? 'badge-danger' : (reporter.power > 0 ? 'badge-success' : 'badge-secondary');
+                    const statusText = reporter.jailed ? 'Jailed' : (reporter.power > 0 ? 'Free' : 'Jailed');
+                    const commissionPercent = (parseFloat(reporter.commission_rate) / 1e18 * 100).toFixed(1);
+                    
+                    // Active status logic
+                    const activeClass = reporter.active_24h ? 'badge-success' : 'badge-secondary';
+                    const activeText = reporter.active_24h ? 'Active' : 'Inactive';
+                    
+                    return `
+                        <tr>
+                            <td>
+                                <div class="reporter">
+                                    <div class="reporter-moniker font-bold text-green">${this.escapeHtml(reporter.moniker || 'Unknown')}</div>
+                                    <div class="reporter-address font-mono text-xs text-gray">${this.escapeHtml(reporter.address)}</div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="power-display">
+                                    <div class="value font-bold text-green">${reporter.power.toLocaleString()}</div>
+                                    <div class="power-bar" style="background: #333; height: 4px; border-radius: 2px; margin-top: 4px;">
+                                        <div style="background: linear-gradient(90deg, #00ff88, #00d4ff); width: ${powerPercent}%; height: 100%; border-radius: 2px; transition: width 0.3s ease;"></div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="value font-bold">${commissionPercent}%</span>
+                            </td>
+                            <td>
+                                <span class="badge ${statusClass}">${statusText}</span>
+                            </td>
+                            <td>
+                                <span class="badge ${activeClass}">${activeText}</span>
+                            </td>
+                            <td>
+                                <button onclick="app.viewReporter('${reporter.address}')" class="action-btn">
+                                    <i class="fas fa-eye"></i> View
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+                
+                tableBody.innerHTML = html;
+            }
+            
+            updatePaginationControls() {
+                const totalPages = Math.ceil(this.totalReporters / this.pageSize);
+                const prevBtn = document.getElementById('prev-page');
+                const nextBtn = document.getElementById('next-page');
+                const currentPageSpan = document.getElementById('current-page');
+                const totalPagesSpan = document.getElementById('total-pages');
+                
+                // Update page numbers
+                currentPageSpan.textContent = this.currentPage + 1;
+                totalPagesSpan.textContent = totalPages;
+                
+                // Update button states
+                prevBtn.disabled = this.currentPage === 0;
+                nextBtn.disabled = this.currentPage >= totalPages - 1;
+            }
+            
+            viewReporter(address) {
+                // For now, just alert the address. Could be expanded to show a modal or navigate to detail page.
+                alert(`Reporter details for: ${address}\n\nThis could open a detailed view in a future update.`);
+            }
+            
+            async loadReporterActivityAnalytics(timeframe) {
+                // Prevent simultaneous requests
+                if (this.isLoadingAnalytics) {
+                    return;
+                }
+                
+                try {
+                    this.isLoadingAnalytics = true;
+                    
+                    // Show loading
+                    const loadingEl = document.getElementById('reporter-activity-loading');
+                    loadingEl.style.display = 'flex';
+                    
+                    // Fetch analytics data
+                    const response = await safeFetch(`/dashboard-mainnet/api/reporters-activity-analytics?timeframe=${timeframe}`);
+                    
+                    const data = await response.json();
+                    
+                    // Create or update chart
+                    this.createReporterActivityChart(data);
+                    
+                } catch (error) {
+                    console.error('Failed to load reporter activity analytics:', error);
+                    
+                    // Show error on chart
+                    const ctx = document.getElementById('reporter-activity-chart').getContext('2d');
+                    if (this.reporterActivityChart) {
+                        this.reporterActivityChart.destroy();
+                    }
+                    ctx.fillStyle = '#ff6b6b';
+                    ctx.font = '16px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Failed to load reporter activity data', ctx.canvas.width / 2, ctx.canvas.height / 2);
+                } finally {
+                    // Hide loading and reset flag
+                    document.getElementById('reporter-activity-loading').style.display = 'none';
+                    this.isLoadingAnalytics = false;
+                }
+            }
+            
+            createReporterActivityChart(data) {
+                const ctx = document.getElementById('reporter-activity-chart').getContext('2d');
+                
+                // Adjust chart height on mobile for better viewport fit
+                const chartContainer = document.getElementById('reporter-activity-chart').parentElement;
+                chartContainer.style.height = IS_MOBILE ? '250px' : '400px';
+                
+                // Dynamic styling variables based on device
+                const pointRadius = IS_MOBILE ? 2 : 4;
+                const hoverRadius = IS_MOBILE ? 4 : 6;
+                const borderWidthMain = IS_MOBILE ? 2 : 3;
+                
+                if (!data.total_reports || data.total_reports.length === 0) {
+                    // Destroy existing chart first
+                    if (this.reporterActivityChart) {
+                        this.reporterActivityChart.destroy();
+                        this.reporterActivityChart = null;
+                    }
+                    // Show "No data" message
+                    ctx.fillStyle = '#00d4ff';
+                    ctx.font = '16px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('No data available for this timeframe', ctx.canvas.width / 2, ctx.canvas.height / 2);
+                    return;
+                }
+                
+                // Update existing chart data if possible, otherwise recreate
+                if (this.reporterActivityChart && data.time_labels.length === this.reporterActivityChart.data.labels.length) {
+                    // Debug logging for update
+                    console.log('📊 Updating existing chart with median data:', data.representative_power_of_aggr.slice(0, 3));
+                    
+                    // Update data efficiently without recreating chart
+                    this.reporterActivityChart.data.labels = data.time_labels;
+                    this.reporterActivityChart.data.datasets[0].data = data.total_reports;
+                    this.reporterActivityChart.data.datasets[1].data = data.active_reporters;
+                    this.reporterActivityChart.data.datasets[2].data = [...data.representative_power_of_aggr];  // Create a copy
+                    this.reporterActivityChart.update('none'); // No animation for faster updates
+                    return;
+                }
+                
+                // Destroy and recreate chart only when necessary
+                if (this.reporterActivityChart) {
+                    this.reporterActivityChart.destroy();
+                    this.reporterActivityChart = null;
+                }
+                
+                // Debug logging for median power data
+                console.log('📊 Debug - Median Power Data:', {
+                    'first_5_values': data.representative_power_of_aggr.slice(0, 5),
+                    'last_5_values': data.representative_power_of_aggr.slice(-5),
+                    'min_value': Math.min(...data.representative_power_of_aggr),
+                    'max_value': Math.max(...data.representative_power_of_aggr),
+                    'data_length': data.representative_power_of_aggr.length,
+                    'unique_count': new Set(data.representative_power_of_aggr).size,
+                    'sample_data_types': data.representative_power_of_aggr.slice(0, 3).map(v => typeof v),
+                    'is_array': Array.isArray(data.representative_power_of_aggr),
+                    'full_array': data.representative_power_of_aggr.slice(0, 10)
+                });
+                
+                // Test: create a simple varying array to make sure Chart.js can handle it
+                const testArray = [7628, 7629, 7666, 7667, 7668, 7671, 7672];
+                console.log('📊 Test: Simple test array for comparison:', testArray);
+
+                // Prepare datasets array
+                const datasets = [
+                    {
+                        label: 'Total Reports',
+                        data: data.total_reports,
+                        borderColor: '#00ff88',
+                        backgroundColor: 'rgba(0, 255, 136, 0.1)',
+                        borderWidth: borderWidthMain,
+                        fill: true,
+                        tension: 0.1,
+                        pointBackgroundColor: '#00ff88',
+                        pointBorderColor: '#000',
+                        pointBorderWidth: 1,
+                        pointRadius: pointRadius,
+                        pointHoverRadius: hoverRadius,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Active Reporters',
+                        data: data.active_reporters,
+                        borderColor: '#00d4ff',
+                        backgroundColor: 'rgba(0, 212, 255, 0.1)',
+                        borderWidth: borderWidthMain,
+                        fill: false,
+                        tension: 0.1,
+                        pointBackgroundColor: '#00d4ff',
+                        pointBorderColor: '#000',
+                        pointBorderWidth: 1,
+                        pointRadius: pointRadius,
+                        pointHoverRadius: hoverRadius,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Median Power Per Report',
+                        data: [...data.representative_power_of_aggr],  // Create a copy of the array
+                        borderColor: '#a855f7',
+                        backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                        borderWidth: borderWidthMain,
+                        fill: false,
+                        tension: 0.1,
+                        pointBackgroundColor: '#a855f7',
+                        pointBorderColor: '#000',
+                        pointBorderWidth: 1,
+                        pointRadius: pointRadius,
+                        pointHoverRadius: hoverRadius,
+                        yAxisID: 'y1'
+                    }
+                ];
+                
+                // Add maximal power dataset if data is available
+                if (data.has_maximal_power_data && data.maximal_power_network) {
+                    datasets.push({
+                        label: 'Maximal Power',
+                        data: data.maximal_power_network,
+                        borderColor: '#ff8c00',
+                        backgroundColor: 'rgba(255, 140, 0, 0.1)',
+                        borderWidth: borderWidthMain,
+                        borderDash: [5, 5],  // Dashed line to distinguish from median power
+                        fill: false,
+                        tension: 0.1,
+                        pointBackgroundColor: '#ff8c00',
+                        pointBorderColor: '#000',
+                        pointBorderWidth: 1,
+                        pointRadius: pointRadius,
+                        pointHoverRadius: hoverRadius,
+                        yAxisID: 'y1'
+                    });
+                }
+
+                this.reporterActivityChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.time_labels,
+                        datasets: datasets
+                    },
+                    options: {
+                        onResize: function(chart, size) {
+                            // Log chart data when resizing
+                            console.log('📊 Chart resize - Median data from chart:', chart.data.datasets[2]?.data?.slice(0, 5));
+                        },
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: IS_MOBILE ? false : {
+                            duration: 500,
+                            easing: 'easeOutQuart'
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: {
+                                    color: '#00d4ff',
+                                    usePointStyle: true,
+                                    font: {
+                                        family: 'Inter',
+                                        size: 12
+                                    }
+                                }
+                            },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                                titleColor: '#00d4ff',
+                                bodyColor: '#ffffff',
+                                borderColor: '#00d4ff',
+                                borderWidth: 1,
+                                callbacks: {
+                                    title: function(context) {
+                                        return `Time: ${context[0].label}`;
+                                    },
+                                    label: function(context) {
+                                        const dataset = context.dataset;
+                                        if (dataset.label === 'Median Power Per Report') {
+                                            return `${dataset.label}: ${context.formattedValue} (median POWER_OF_AGGR)`;
+                                        }
+                                        return `${dataset.label}: ${context.formattedValue}`;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: {
+                                    color: '#00d4ff',
+                                    maxTicksLimit: 8,
+                                    font: {
+                                        family: 'Inter',
+                                        size: 11
+                                    }
+                                },
+                                grid: {
+                                    color: 'rgba(51, 51, 68, 0.3)'
+                                }
+                            },
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                ticks: {
+                                    color: '#00d4ff',
+                                    beginAtZero: true,
+                                    font: {
+                                        family: 'Inter',
+                                        size: 11
+                                    }
+                                },
+                                grid: {
+                                    color: 'rgba(51, 51, 68, 0.3)'
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Reports / Reporters',
+                                    color: '#00d4ff'
+                                }
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                min: 7600,  // Set minimum closer to actual data range
+                                max: 7800,  // Set maximum closer to actual data range
+                                ticks: {
+                                    color: '#a855f7',
+                                    font: {
+                                        family: 'Inter',
+                                        size: 11
+                                    },
+                                    callback: function(value) {
+                                        return value.toLocaleString();  // Format large numbers with commas
+                                    }
+                                },
+                                grid: {
+                                    drawOnChartArea: false,
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Median Power -vs- Maximal Power',
+                                    color: '#a855f7'
+                                }
+                            }
+                        },
+                        interaction: {
+                            mode: 'nearest',
+                            axis: 'x',
+                            intersect: false
+                        }
+                    }
+                });
+            }
+            
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        }
+        
+        // Initialize the app
+        const app = new ReportersApp();
+        
+        // Auto-refresh every 5 minutes
+        setInterval(async () => {
+            try {
+                await app.loadReporterActivityAnalytics(app.currentTimeframe);
+                await app.loadSummary();
+                await app.loadReporters();
+            } catch (error) {
+                console.error('Auto-refresh error:', error);
+            }
+        }, 5 * 60 * 1000);
+    </script>
+</body>
+</html> 

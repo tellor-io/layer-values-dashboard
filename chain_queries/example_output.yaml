@@ -1,0 +1,279 @@
+# example output for the command ./layerd query reporter reporters
+pagination:
+  total: "36"
+reporters:
+- address: tellor1qma4ngrq2vqz6j82u548lder3ue6m25agqv9rt
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: tekin86
+- address: tellor1q7pamj7v8d3wue5t5pwgejktajrnhuzzthwfel
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed: true
+    jailed_until: "2025-05-31T19:36:07.659845144Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: telliots-revenge
+- address: tellor1pn5yc5vdesc6ef05dge95axza5leyy37f7wg8p
+  metadata:
+    commission_rate: "50000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: SpaceStake
+- address: tellor1y7y66xp3vrn8e6k4vxa7ygh7judy2jx40r2ktw
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: warrion08
+- address: tellor198dvh9n2d7aqvrxzcsdfz73xtkv9jcjv5rakr6
+  metadata:
+    commission_rate: "40000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "2025-05-23T16:50:44.616299185Z"
+    min_tokens_required: "1000000"
+    moniker: tank
+  power: "1192"
+- address: tellor1952ghnp9jat6eraqakdjruplrj9c40f0tn5jld
+  metadata:
+    commission_rate: "100000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: yoda
+  power: "1248"
+- address: tellor1xyxd7x9yjfh0ad6mg3wfyczwmandzj7qlgl3ug
+  metadata:
+    commission_rate: "50000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: spudstest_403
+  power: "1"
+- address: tellor1gnr3smk3yvqrzfpgdz492u23gtkn4aasgyfyj6
+  metadata:
+    commission_rate: "50000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: ValidatriumReporter
+  power: "158"
+- address: tellor1gkstv3n4cpmdskh4m8mhr2mlljf540sqsm7gnp
+  metadata:
+    commission_rate: "40000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "2025-05-23T16:48:14.643197076Z"
+    min_tokens_required: "1000000"
+    moniker: cypher
+  power: "1121"
+- address: tellor12vz6z5er29rwthuqlscqtuqfttl6x2wshfsyj2
+  metadata:
+    commission_rate: "200000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: new_reporter_on_the_block
+  power: "1"
+- address: tellor1tf45m2r8x30zmpytlddhfu450eg9s5ad2upq9y
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: REPORTER_NodeSafe
+  power: "91"
+- address: tellor1vzp25djcsjt7lmpgqvys7rqjfg0k4ytkmm8n7r
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: maxwellhill
+- address: tellor1vw2yy9nf3wz7hey89tpw5hn0yr3hkrzt889x47
+  metadata:
+    commission_rate: "100000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: pazu2
+  power: "20"
+- address: tellor1vk2f5m4jsezgaq9tlu2fhq7t94xpykjlmqcn5k
+  metadata:
+    commission_rate: "100000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: obi_wan
+  power: "1248"
+- address: tellor1vm3awjytk37znyy0p0xhtmztw72g4yamq5wyf9
+  metadata:
+    commission_rate: "50000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: MaxwellHill
+- address: tellor1d0t6p47asr8p9smeq9a93qhmfgtwmcagtyv5hw
+  metadata:
+    commission_rate: "100000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: Sr20de
+  power: "68"
+- address: tellor1dn2kyjpyx4ns7ecu9m2wx72rdxz208x32x589d
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: 0xHub
+- address: tellor10raclec2n0e0xxlayhcqn6632zp2gr27l5v9vf
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: bozo-reporter
+- address: tellor10usyr7v4xe2uhtnvg4kwtgtuzh5e4u2378zjj9
+  metadata:
+    commission_rate: "110000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "2025-03-20T22:21:05.790154913Z"
+    min_tokens_required: "1000100"
+    moniker: neo
+  power: "1270"
+- address: tellor13nwzm5dfd26ue74jr6sc39gyn3qze0rj8jferl
+  metadata:
+    commission_rate: "50000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: tellorvaloper13nwzm5dfd26ue74jr6sc39gyn3qze0rjja9t60
+  power: "92"
+- address: tellor1352g2lt8h2r86k88vmnkhse9s056gn8cv0vuhd
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: Shazoe
+  power: "49"
+- address: tellor13lqwnpnclcg6x0hrn5t72xxa8hy9ws7hljs537
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: HusoNode
+  power: "54"
+- address: tellor13l5f93zutylh847cnmd2rpg6hha86dju649964
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: airSintez_Report
+  power: "94"
+- address: tellor1n8a2au0p0w49rctey3mxh3kajsdqtdyp4vrtfz
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: DvlNodeReporter
+- address: tellor1ncq34psgcmncf3xpugdyqfv8esj8rj7sjflkuy
+  metadata:
+    commission_rate: "50000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: file_backend_tester
+- address: tellor15fem3fyv9rv4tdl6kgrdj2fqqwv4p3sycgglxh
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: Krews
+- address: tellor15ap5jyn02a6s45qsgk5dqc5zu09ma50nrepq2v
+  metadata:
+    commission_rate: "40000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "2025-05-23T16:51:24.566473148Z"
+    min_tokens_required: "1000000"
+    moniker: dozer
+  power: "1166"
+- address: tellor14874aky5afw60wlukkgvc5fqcm68825t6j2qj8
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: REPORTER_VIETNNIT
+  power: "90"
+- address: tellor1k8v5l8spru8hc58nr84nmumdm83j3cuz4ecpl6
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: UTSA
+- address: tellor1my9clensgv58mqhrknczqlje43sqzhyyazvsq3
+  metadata:
+    commission_rate: "50000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: jtd
+- address: tellor1mtfcujfwtk5kdcf7svnwj6ucfnv9s0v0phhsht
+  metadata:
+    commission_rate: "1000000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: alice
+  power: "4"
+- address: tellor1mkl462wk4q64825ce5escjcg0l3p5j2n3hu8h9
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: REPORTER_Galaxy
+  power: "93"
+- address: tellor1m6tuy2ek06yptcyhtd3t7h54uvv3wxgvmjckt9
+  metadata:
+    commission_rate: "240000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "2025-04-04T15:37:58.348832023Z"
+    min_tokens_required: "1100000"
+    moniker: thunderbolt
+- address: tellor1a60lcwf7l0h6grhxjkskd4m304tl69sffxlda3
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: SyaNodes
+  power: "52"
+- address: tellor17gc67q05d5rgsz9caznm0s7s5eazwg2e3fkk8e
+  metadata:
+    commission_rate: "10000000000000000"
+    jailed: true
+    jailed_until: "2262-04-11T23:47:16.854775807Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: telliot_tester_2000
+- address: tellor1lzv8ufuz2zu8f37wz8vy2sluljn3saap07vpek
+  metadata:
+    commission_rate: "250000000000000000"
+    jailed_until: "0001-01-01T00:00:00Z"
+    last_updated: "0001-01-01T00:00:00Z"
+    min_tokens_required: "1000000"
+    moniker: pi69
+  power: "95"

@@ -250,3 +250,6 @@ uv.lock
 .env.development
 .env.test
 .env.production
+
+layerd
+docs_content

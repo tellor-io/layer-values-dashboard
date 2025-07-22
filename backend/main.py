@@ -1,13 +1,12 @@
 import duckdb
 import pandas as pd
 import os
-import glob
 import argparse
 import sys
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 from typing import Optional, List
 import threading
@@ -16,7 +15,7 @@ from pathlib import Path
 import re
 import psutil
 import gc
-import asyncio
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -31,6 +30,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Add parent directory to path for importing chain_queries package
+sys.path.append(str(Path(__file__).parent.parent))
+try:
+    from chain_queries.reporter_fetcher import ReporterFetcher
+    REPORTER_FETCHER_AVAILABLE = True
+    logger.info("✅ Reporter fetcher module loaded successfully")
+except Exception as e:
+    logger.warning(f"⚠️  Reporter fetcher not available: {e}")
+    REPORTER_FETCHER_AVAILABLE = False
+
+# Global reporter fetcher instance
+reporter_fetcher = None
+
 # Add this helper function FIRST
 def formatNumber(num):
     """Format numbers with commas for readability"""
@@ -38,12 +50,31 @@ def formatNumber(num):
         return "0"
     return f"{num:,}"
 
+def safe_get(row, index=0, default=None):
+    """Safely get value from row, returning default if None or index error"""
+    try:
+        if row is None:
+            return default if default is not None else 0
+        if hasattr(row, '__len__') and len(row) > index:
+            value = row[index]
+            return value if value is not None else (default if default is not None else 0)
+        return default if default is not None else 0
+    except (IndexError, TypeError):
+        return default if default is not None else 0
+
+# Alternative approach: Use this pattern instead of .fetchone()[0]
+# result = conn.execute("...").fetchone()
+# value = result[0] if result else 0
+
 # Parse command line arguments for direct uvicorn usage
 def parse_args():
     parser = argparse.ArgumentParser(add_help=False)  # Don't interfere with uvicorn's help
     parser.add_argument('--source-dir', '-s', 
                        default=os.getenv('LAYER_SOURCE_DIR', 'source_tables'),
                        help='Directory containing CSV files (default: source_tables)')
+    parser.add_argument('--layer-rpc-url', 
+                       default=os.getenv('LAYER_RPC_URL', None),
+                       help='RPC URL for layerd commands (default: use layerd default)')
     
     # Only parse known args to avoid conflicts with uvicorn
     args, unknown = parser.parse_known_args()
@@ -85,14 +116,34 @@ def create_duckdb_connection():
         # Create connection with valid global options
         conn = duckdb.connect(":memory:")
         
-        # Set memory and thread configuration
-        conn.execute("SET memory_limit='10GB'")
+        # Get available memory and set a reasonable limit
+        try:
+            import psutil
+            total_memory_gb = psutil.virtual_memory().total / (1024**3)
+            # Use 60% of available memory, but cap at 16GB for safety
+            memory_limit_gb = min(int(total_memory_gb * 0.6), 16)
+            conn.execute(f"SET memory_limit='{memory_limit_gb}GB'")
+            logger.info(f"✅ Set memory limit to {memory_limit_gb}GB (60% of {total_memory_gb:.1f}GB total)")
+        except Exception as mem_error:
+            logger.warning(f"⚠️  Could not set memory_limit: {mem_error}")
+            # Fallback to a reasonable default
+            conn.execute("SET memory_limit='8GB'")
+            logger.info("✅ Using fallback memory limit of 8GB")
+        
+        # Set thread configuration
         conn.execute("SET threads=3")
         conn.execute("SET temp_directory='/tmp/duckdb'")
         
         # Performance optimizations
         conn.execute("SET preserve_insertion_order=false")
         conn.execute("SET enable_progress_bar=false")
+        
+        # Additional CSV-specific optimizations
+        try:
+            conn.execute("SET enable_object_cache=true")
+            conn.execute("SET checkpoint_threshold='1GB'")
+        except Exception as opt_error:
+            logger.warning(f"⚠️  Could not set some optimization options: {opt_error}")
         
         logger.info("✅ Created DuckDB connection with optimized settings")
         return conn
@@ -102,7 +153,209 @@ def create_duckdb_connection():
 
 # Global DuckDB connection with improved configuration
 conn = create_duckdb_connection()
-db_lock = threading.RLock()  # Use RLock instead of Lock for better thread safety
+
+# Global flag to prevent concurrent refresh operations
+refresh_in_progress = False
+refresh_lock = threading.Lock()
+
+# Use a timeout lock to prevent indefinite blocking
+import threading
+class TimeoutRLock:
+    def __init__(self, timeout=30):
+        self._lock = threading.RLock()
+        self.timeout = timeout
+    
+    def __enter__(self):
+        acquired = self._lock.acquire(timeout=self.timeout)
+        if not acquired:
+            raise TimeoutError(f"Could not acquire database lock within {self.timeout} seconds")
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._lock.release()
+    
+    def acquire(self, timeout=None):
+        return self._lock.acquire(timeout=timeout or self.timeout)
+    
+    def release(self):
+        return self._lock.release()
+
+db_lock = TimeoutRLock(timeout=30)  # 30 second timeout to prevent indefinite blocking
+
+def get_safe_timestamp_filter():
+    """
+    Get a WHERE clause that excludes incomplete blocks by filtering out the most recent timestamp.
+    But allow showing recent data if we have 3+ distinct timestamps.
+    """
+    try:
+        with db_lock:
+            # Get the most recent timestamps
+            recent_timestamps = conn.execute("""
+                SELECT DISTINCT TIMESTAMP 
+                FROM layer_data 
+                ORDER BY TIMESTAMP DESC 
+                LIMIT 3
+            """).fetchall()
+            
+            if len(recent_timestamps) >= 3:
+                # We have 3+ timestamps, exclude only the most recent
+                most_recent_timestamp = recent_timestamps[0][0]
+                logger.info(f"🛡️  Filtering out potentially incomplete block at timestamp: {most_recent_timestamp}")
+                return "TIMESTAMP < ?", [most_recent_timestamp]
+            elif len(recent_timestamps) == 2:
+                # We have 2 timestamps, show the older one
+                safe_timestamp = recent_timestamps[1][0]
+                logger.info(f"🛡️  Using second-most recent timestamp: {safe_timestamp}")
+                return "TIMESTAMP <= ?", [safe_timestamp]
+            else:
+                # Only one timestamp exists, have to include it
+                logger.warning(f"⚠️  Only one timestamp block exists, including it despite potential incompleteness")
+                return "1=1", []
+                
+    except Exception as e:
+        logger.error(f"❌ Error getting safe timestamp filter: {e}")
+        return "1=1", []
+
+def get_safe_timestamp_value():
+    """
+    Get the most recent safe (complete) timestamp value.
+    
+    Returns:
+        int or None: The most recent safe timestamp, or None if no safe data exists
+    """
+    try:
+        with db_lock:
+            # Get the second most recent timestamp (should be complete)
+            recent_timestamps = conn.execute("""
+                SELECT DISTINCT TIMESTAMP 
+                FROM layer_data 
+                ORDER BY TIMESTAMP DESC 
+                LIMIT 2
+            """).fetchall()
+            
+            if len(recent_timestamps) >= 2:
+                # Use second most recent timestamp for stability
+                safe_timestamp = recent_timestamps[1][0]
+                logger.debug(f"📈 Safe timestamp: {safe_timestamp}")
+                return safe_timestamp
+            elif len(recent_timestamps) == 1:
+                # Only one timestamp available
+                safe_timestamp = recent_timestamps[0][0]
+                logger.warning(f"⚠️  Only one timestamp available, using it: {safe_timestamp}")
+                return safe_timestamp
+            else:
+                # No data
+                return None
+                
+    except Exception as e:
+        logger.error(f"❌ Error getting safe timestamp value: {e}")
+        return None
+
+def calculate_power_of_aggr(source_file=None, recent_only=False):
+    """
+    Calculate and update POWER_OF_AGGR for all rows.
+    POWER_OF_AGGR should be the sum of all POWER values for rows with the same TIMESTAMP.
+    
+    Args:
+        source_file: If provided, only update rows from this source file
+        recent_only: If True, only update recent timestamps (last 10 unique timestamps)
+    """
+    try:
+        with db_lock:
+            if recent_only:
+                logger.info("🔄 Calculating POWER_OF_AGGR values (recent only for performance)...")
+                
+                # Get the most recent 10 unique timestamps
+                recent_timestamps = conn.execute("""
+                    SELECT DISTINCT TIMESTAMP 
+                    FROM layer_data 
+                    ORDER BY TIMESTAMP DESC 
+                    LIMIT 10
+                """).fetchall()
+                
+                if not recent_timestamps:
+                    logger.warning("⚠️ No timestamps found for recent calculation")
+                    return
+                
+                timestamp_list = [str(ts[0]) for ts in recent_timestamps]
+                timestamp_in_clause = "(" + ",".join(timestamp_list) + ")"
+                
+                # Update only recent timestamps
+                update_query = f"""
+                    UPDATE layer_data 
+                    SET POWER_OF_AGGR = (
+                        SELECT SUM(POWER) 
+                        FROM layer_data ld2 
+                        WHERE ld2.TIMESTAMP = layer_data.TIMESTAMP
+                    )
+                    WHERE TIMESTAMP IN {timestamp_in_clause}
+                """
+                
+                result = conn.execute(update_query)
+                affected_rows = result.rowcount if hasattr(result, 'rowcount') else 0
+                
+                logger.info(f"✅ POWER_OF_AGGR calculation complete (recent only):")
+                logger.info(f"   - Updated timestamps: {len(recent_timestamps)}")
+                logger.info(f"   - Affected rows: {affected_rows}")
+                
+            else:
+                logger.info("🔄 Calculating POWER_OF_AGGR values (full calculation)...")
+                
+                # Build WHERE clause for source file filtering
+                where_clause = ""
+                params = []
+                if source_file:
+                    where_clause = "WHERE source_file = ?"
+                    params = [source_file]
+                
+                # Update POWER_OF_AGGR for all rows by calculating the sum of POWER for each TIMESTAMP
+                update_query = f"""
+                    UPDATE layer_data 
+                    SET POWER_OF_AGGR = (
+                        SELECT SUM(POWER) 
+                        FROM layer_data ld2 
+                        WHERE ld2.TIMESTAMP = layer_data.TIMESTAMP
+                    )
+                    {where_clause}
+                """
+                
+                result = conn.execute(update_query, params)
+                affected_rows = result.rowcount if hasattr(result, 'rowcount') else 0
+                
+                # Get some statistics about the calculation
+                if source_file:
+                    stats_query = """
+                        SELECT 
+                            COUNT(DISTINCT TIMESTAMP) as unique_timestamps,
+                            COUNT(*) as total_rows,
+                            MIN(POWER_OF_AGGR) as min_power_of_aggr,
+                            MAX(POWER_OF_AGGR) as max_power_of_aggr
+                        FROM layer_data 
+                        WHERE source_file = ? AND POWER_OF_AGGR IS NOT NULL
+                    """
+                    stats = conn.execute(stats_query, [source_file]).fetchone()
+                else:
+                    stats_query = """
+                        SELECT 
+                            COUNT(DISTINCT TIMESTAMP) as unique_timestamps,
+                            COUNT(*) as total_rows,
+                            MIN(POWER_OF_AGGR) as min_power_of_aggr,
+                            MAX(POWER_OF_AGGR) as max_power_of_aggr
+                        FROM layer_data 
+                        WHERE POWER_OF_AGGR IS NOT NULL
+                    """
+                    stats = conn.execute(stats_query).fetchone()
+                
+                if stats:
+                    logger.info(f"✅ POWER_OF_AGGR calculation complete:")
+                    logger.info(f"   - Unique timestamps: {safe_get(stats, 0, 0)}")
+                    logger.info(f"   - Total rows updated: {safe_get(stats, 1, 0)}")
+                    logger.info(f"   - POWER_OF_AGGR range: {safe_get(stats, 2, 0)} - {safe_get(stats, 3, 0)}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error calculating POWER_OF_AGGR: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Data storage
 data_info = {
@@ -185,27 +438,51 @@ def load_historical_table(table_info):
                 """).fetchall()
                 
                 logger.info(f"📋 Found {len(csv_columns)} columns in CSV:")
+                actual_columns = {}
                 for col in csv_columns:
-                    logger.info(f"   - {col[0]}: {col[1]}")
+                    col_name = col[0]
+                    col_type = col[1]
+                    # Handle URL-encoded column names
+                    clean_name = col_name.replace('+AF8-', '_').replace('%5F', '_')
+                    actual_columns[clean_name] = col_name
+                    logger.info(f"   - {col_name} ({clean_name}): {col_type}")
                 
-                # Load data directly with proper error handling
+                # Build the SELECT statement with actual column names
+                def map_column(expected_name):
+                    """Return a quoted column name if present, otherwise SQL NULL.
+                    This prevents errors when the CSV is missing optional columns."""
+                    if expected_name in actual_columns:
+                        return f'"{actual_columns[expected_name]}"'
+
+                    # Try common variations (URL-encoded or case variations)
+                    for actual_name in actual_columns.values():
+                        if actual_name.replace('+AF8-', '_').replace('%5F', '_') == expected_name:
+                            return f'"{actual_name}"'
+
+                    # Column truly not present – use SQL NULL literal instead of a missing identifier
+                    logger.debug(f"🕳️  Column '{expected_name}' not found in CSV. Inserting NULL for it.")
+                    return 'NULL'
+                
+                # Load data directly with proper error handling and column mapping
+                # Note: POWER_OF_AGGR will be calculated after loading, not from CSV
                 conn.execute(f"""
                     INSERT OR IGNORE INTO layer_data 
                     SELECT 
-                        REPORTER,
-                        QUERY_TYPE,
-                        QUERY_ID,
-                        AGGREGATE_METHOD,
-                        CYCLELIST,
-                        POWER,
-                        TIMESTAMP,
-                        TRUSTED_VALUE,
-                        TX_HASH,
-                        CURRENT_TIME,
-                        TIME_DIFF,
-                        VALUE,
-                        DISPUTABLE,
-                        '{table_info['filename']}' as source_file
+                        {map_column('REPORTER')} as REPORTER,
+                        {map_column('QUERY_TYPE')} as QUERY_TYPE,
+                        {map_column('QUERY_ID')} as QUERY_ID,
+                        {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
+                        {map_column('CYCLELIST')} as CYCLELIST,
+                        {map_column('POWER')} as POWER,
+                        {map_column('TIMESTAMP')} as TIMESTAMP,
+                        {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
+                        {map_column('TX_HASH')} as TX_HASH,
+                        {map_column('CURRENT_TIME')} as CURRENT_TIME,
+                        {map_column('TIME_DIFF')} as TIME_DIFF,
+                        {map_column('VALUE')} as VALUE,
+                        {map_column('DISPUTABLE')} as DISPUTABLE,
+                        '{table_info['filename']}' as source_file,
+                        NULL as POWER_OF_AGGR
                     FROM read_csv_auto('{table_info['path']}', 
                         header=true,
                         sample_size=10000,
@@ -214,11 +491,14 @@ def load_historical_table(table_info):
                 """)
                 
                 # Get the count of rows actually inserted
-                total_rows = conn.execute("""
+                total_rows = safe_get(conn.execute("""
                     SELECT COUNT(*) FROM layer_data WHERE source_file = ?
-                """, [table_info['filename']]).fetchone()[0]
+                """, [table_info['filename']]).fetchone())
                 
                 logger.info(f"✅ Successfully inserted {total_rows} rows from {table_info['filename']}")
+                
+                # Calculate POWER_OF_AGGR for the newly loaded data
+                calculate_power_of_aggr(table_info['filename'])
                 
             except Exception as db_error:
                 logger.error(f"❌ Database error loading {table_info['filename']}: {db_error}")
@@ -229,20 +509,21 @@ def load_historical_table(table_info):
                     conn.execute(f"""
                         INSERT OR IGNORE INTO layer_data 
                         SELECT 
-                            CAST(REPORTER AS VARCHAR),
-                            CAST(QUERY_TYPE AS VARCHAR),
-                            CAST(QUERY_ID AS VARCHAR),
-                            CAST(AGGREGATE_METHOD AS VARCHAR),
-                            TRY_CAST(CYCLELIST AS BOOLEAN),
-                            TRY_CAST(POWER AS INTEGER),
-                            TRY_CAST(TIMESTAMP AS BIGINT),
-                            TRY_CAST(TRUSTED_VALUE AS DOUBLE),
-                            CAST(TX_HASH AS VARCHAR),
-                            TRY_CAST(CURRENT_TIME AS BIGINT),
-                            TRY_CAST(TIME_DIFF AS INTEGER),
-                            TRY_CAST(VALUE AS DOUBLE),
-                            TRY_CAST(DISPUTABLE AS BOOLEAN),
-                            '{table_info['filename']}' as source_file
+                            CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
+                            CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
+                            CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
+                            CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
+                            TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
+                            TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
+                            TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
+                            TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
+                            CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
+                            TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
+                            TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
+                            TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
+                            TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
+                            '{table_info['filename']}' as source_file,
+                            NULL as POWER_OF_AGGR
                         FROM read_csv_auto('{table_info['path']}', 
                             header=true,
                             all_varchar=true,
@@ -251,11 +532,14 @@ def load_historical_table(table_info):
                         )
                     """)
                     
-                    total_rows = conn.execute("""
+                    total_rows = safe_get(conn.execute("""
                         SELECT COUNT(*) FROM layer_data WHERE source_file = ?
-                    """, [table_info['filename']]).fetchone()[0]
+                    """, [table_info['filename']]).fetchone())
                     
                     logger.info(f"✅ Fallback successful: inserted {total_rows} rows from {table_info['filename']}")
+                    
+                    # Calculate POWER_OF_AGGR for the newly loaded data
+                    calculate_power_of_aggr(table_info['filename'])
                     
                 except Exception as fallback_error:
                     logger.error(f"❌ Fallback also failed: {fallback_error}")
@@ -291,58 +575,317 @@ def load_historical_table(table_info):
 
 def load_active_table(table_info, is_reload=False):
     """Load or reload the active table"""
-    try:
-        # Add memory monitoring
-        process = psutil.Process()
-        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-        
-        if is_reload:
-            logger.info(f"💾 Reloading active table: {table_info['filename']} ({table_info['size'] / 1024 / 1024:.1f} MB)")
-            logger.info(f"📊 Initial memory: {initial_memory:.1f} MB")
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            # Add memory monitoring
+            process = psutil.Process()
+            initial_memory = process.memory_info().rss / 1024 / 1024  # MB
             
-            # Remove existing data for this file with thread safety
-            with db_lock:
-                logger.info(f"🗑️  Removing existing data for {table_info['filename']}")
-                conn.execute("DELETE FROM layer_data WHERE source_file = ?", [table_info['filename']])
-        else:
-            logger.info(f"💾 Loading active table: {table_info['filename']} ({table_info['size'] / 1024 / 1024:.1f} MB)")
-            logger.info(f"📊 Initial memory: {initial_memory:.1f} MB")
-        
-        # Check if file exists and is readable
-        if not table_info['path'].exists():
-            logger.error(f"❌ Error: File {table_info['path']} does not exist")
-            return None
-            
-        # For very large files, add a warning but still try to load (active table is important)
-        if table_info['size'] > 1024 * 1024 * 1024:  # 1GB warning
-            logger.warning(f"⚠️  Very large active table detected ({table_info['size'] / 1024 / 1024:.1f} MB), loading carefully...")
-        
-        # Use thread-safe database access
-        with db_lock:
-            logger.info(f"📖 Reading CSV file: {table_info['path']}")
-            
-            try:
-                # First, inspect the CSV to understand its structure
-                logger.info("🔍 Inspecting CSV structure...")
-                csv_info = conn.execute(f"""
-                    SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
-                    LIMIT 3
-                """).fetchall()
+            if is_reload:
+                logger.info(f"💾 Reloading active table: {table_info['filename']} ({table_info['size'] / 1024 / 1024:.1f} MB) - Attempt {attempt + 1}/{max_retries}")
+                logger.info(f"📊 Initial memory: {initial_memory:.1f} MB")
                 
-                if not csv_info:
-                    logger.error(f"❌ CSV file appears to be empty: {table_info['filename']}")
+                # Remove existing data for this file with thread safety
+                with db_lock:
+                    logger.info(f"🗑️  Removing existing data for {table_info['filename']}")
+                    conn.execute("DELETE FROM layer_data WHERE source_file = ?", [table_info['filename']])
+                    # Force garbage collection and memory cleanup
+                    gc.collect()
+                    time.sleep(0.1)  # Brief pause to allow cleanup
+            else:
+                logger.info(f"💾 Loading active table: {table_info['filename']} ({table_info['size'] / 1024 / 1024:.1f} MB)")
+                logger.info(f"📊 Initial memory: {initial_memory:.1f} MB")
+            
+            # Check if file exists and is readable
+            if not table_info['path'].exists():
+                logger.error(f"❌ Error: File {table_info['path']} does not exist")
+                return None
+            
+            # Add file size validation to detect race conditions
+            current_size = table_info['path'].stat().st_size
+            if current_size == 0:
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️  File appears empty (size: {current_size}), retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    logger.error(f"❌ File remains empty after {max_retries} attempts: {table_info['filename']}")
                     return None
+            
+            # Check if file size has changed significantly since detection (another race condition indicator)
+            size_diff = abs(current_size - table_info['size'])
+            size_change_threshold = table_info['size'] * 0.1  # 10% change threshold
+            if size_diff > size_change_threshold:
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️  File size changed significantly during reload (expected: {table_info['size']}, current: {current_size}), retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                    # Update table_info with new size for next attempt
+                    table_info['size'] = current_size
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    logger.warning(f"⚠️  File size still changing after {max_retries} attempts, proceeding with current size: {current_size}")
+                    table_info['size'] = current_size
+            
+            # For very large files, add a warning but still try to load (active table is important)
+            if table_info['size'] > 1024 * 1024 * 1024:  # 1GB warning
+                logger.warning(f"⚠️  Very large active table detected ({table_info['size'] / 1024 / 1024:.1f} MB), loading carefully...")
+            
+            # Use thread-safe database access
+            with db_lock:
+                logger.info(f"📖 Reading CSV file: {table_info['path']}")
                 
-                # Get column information
-                csv_columns = conn.execute(f"""
-                    DESCRIBE SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
-                """).fetchall()
+                try:
+                    # First, inspect the CSV to understand its structure
+                    logger.info("🔍 Inspecting CSV structure...")
+                    csv_info = conn.execute(f"""
+                        SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
+                        LIMIT 3
+                    """).fetchall()
+                    
+                    if not csv_info:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"⚠️  CSV file appears to be empty during read: {table_info['filename']}, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error(f"❌ CSV file appears to be empty after {max_retries} attempts: {table_info['filename']}")
+                            return None
+                    
+                    # Get column information
+                    csv_columns = conn.execute(f"""
+                        DESCRIBE SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
+                    """).fetchall()
+                    
+                    logger.info(f"📋 Found {len(csv_columns)} columns in CSV:")
+                    actual_columns = {}
+                    for col in csv_columns:
+                        col_name = col[0]
+                        col_type = col[1]
+                        # Handle URL-encoded column names
+                        clean_name = col_name.replace('+AF8-', '_').replace('%5F', '_')
+                        actual_columns[clean_name] = col_name
+                        logger.info(f"   - {col_name} ({clean_name}): {col_type}")
+                    
+                    # Build the SELECT statement with actual column names
+                    def map_column(expected_name):
+                        """Return a quoted column name if present, otherwise SQL NULL.
+                        This prevents errors when the CSV is missing optional columns."""
+                        if expected_name in actual_columns:
+                            return f'"{actual_columns[expected_name]}"'
+
+                        # Try common variations (URL-encoded or case variations)
+                        for actual_name in actual_columns.values():
+                            if actual_name.replace('+AF8-', '_').replace('%5F', '_') == expected_name:
+                                return f'"{actual_name}"'
+
+                        # Column truly not present – use SQL NULL literal instead of a missing identifier
+                        logger.debug(f"🕳️  Column '{expected_name}' not found in CSV. Inserting NULL for it.")
+                        return 'NULL'
+                    
+                    logger.info("📥 Loading CSV data into database...")
+                    # Load data directly with proper error handling and column mapping
+                    conn.execute(f"""
+                        INSERT OR IGNORE INTO layer_data 
+                        SELECT 
+                            {map_column('REPORTER')} as REPORTER,
+                            {map_column('QUERY_TYPE')} as QUERY_TYPE,
+                            {map_column('QUERY_ID')} as QUERY_ID,
+                            {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
+                            {map_column('CYCLELIST')} as CYCLELIST,
+                            {map_column('POWER')} as POWER,
+                            {map_column('TIMESTAMP')} as TIMESTAMP,
+                            {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
+                            {map_column('TX_HASH')} as TX_HASH,
+                            {map_column('CURRENT_TIME')} as CURRENT_TIME,
+                            {map_column('TIME_DIFF')} as TIME_DIFF,
+                            {map_column('VALUE')} as VALUE,
+                            {map_column('DISPUTABLE')} as DISPUTABLE,
+                            '{table_info['filename']}' as source_file,
+                            NULL as POWER_OF_AGGR
+                        FROM read_csv_auto('{table_info['path']}', 
+                            header=true,
+                            sample_size=10000,
+                            ignore_errors=true
+                        )
+                    """)
+                    
+                    # Get the count of rows actually inserted
+                    total_rows = safe_get(conn.execute("""
+                        SELECT COUNT(*) FROM layer_data WHERE source_file = ?
+                    """, [table_info['filename']]).fetchone())
+                    
+                    # Validate that we actually loaded some data
+                    if total_rows == 0:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"⚠️  No rows loaded from CSV file: {table_info['filename']}, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error(f"❌ No rows loaded from CSV file after {max_retries} attempts: {table_info['filename']}")
+                            return None
+                    
+                    logger.info(f"✅ Successfully inserted {total_rows} rows from {table_info['filename']}")
+                    
+                    # Calculate POWER_OF_AGGR for the newly loaded data
+                    calculate_power_of_aggr(table_info['filename'])
+                    
+                    # Success! Break out of retry loop
+                    break
+                    
+                except Exception as db_error:
+                    logger.error(f"❌ Database error loading {table_info['filename']}: {db_error}")
+                    
+                    # Try a more permissive approach
+                    try:
+                        logger.info("🔄 Trying fallback approach with all_varchar...")
+                        conn.execute(f"""
+                            INSERT OR IGNORE INTO layer_data 
+                            SELECT 
+                                CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
+                                CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
+                                CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
+                                CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
+                                TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
+                                TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
+                                TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
+                                TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
+                                CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
+                                TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
+                                TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
+                                TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
+                                TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
+                                '{table_info['filename']}' as source_file,
+                                NULL as POWER_OF_AGGR
+                            FROM read_csv_auto('{table_info['path']}', 
+                                header=true,
+                                all_varchar=true,
+                                sample_size=10000,
+                                ignore_errors=true
+                            )
+                        """)
+                        
+                        total_rows = safe_get(conn.execute("""
+                            SELECT COUNT(*) FROM layer_data WHERE source_file = ?
+                        """, [table_info['filename']]).fetchone())
+                        
+                        if total_rows == 0:
+                            if attempt < max_retries - 1:
+                                logger.warning(f"⚠️  Fallback approach also loaded no rows: {table_info['filename']}, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                                time.sleep(retry_delay)
+                                continue
+                            else:
+                                logger.error(f"❌ Fallback approach also loaded no rows after {max_retries} attempts: {table_info['filename']}")
+                                return None
+                        
+                        logger.info(f"✅ Fallback successful: inserted {total_rows} rows from {table_info['filename']}")
+                        
+                        # Calculate POWER_OF_AGGR for the newly loaded data
+                        calculate_power_of_aggr(table_info['filename'])
+                        
+                        # Success! Break out of retry loop
+                        break
+                        
+                    except Exception as fallback_error:
+                        if attempt < max_retries - 1:
+                            logger.error(f"❌ Fallback also failed (attempt {attempt + 1}/{max_retries}): {fallback_error}")
+                            logger.info(f"⏳ Retrying in {retry_delay} seconds...")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            logger.error(f"❌ All approaches failed after {max_retries} attempts: {fallback_error}")
+                            return None
+            
+            logger.info(f"✅ Read {total_rows} rows from {table_info['filename']}")
+            
+            data_info["active_table"] = table_info
+            data_info["active_table_last_size"] = table_info['size']
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Final memory check
+            final_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.info(f"✅ Successfully loaded {table_info['filename']} with {total_rows} rows")
+            logger.info(f"📊 Final memory: {final_memory:.1f} MB (total delta: +{final_memory - initial_memory:.1f} MB)")
+            
+            return {
+                "filename": table_info['filename'],
+                "rows": total_rows,
+                "size_mb": round(table_info['size'] / 1024 / 1024, 2),
+                "timestamp": table_info['timestamp'],
+                "type": "active"
+            }
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.error(f"❌ Error loading active table {table_info['filename']} (attempt {attempt + 1}/{max_retries}): {e}")
+                logger.info(f"⏳ Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                logger.error(f"❌ Error loading active table {table_info['filename']} after {max_retries} attempts: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+    
+    # If we get here, the retry loop completed successfully
+    logger.info(f"✅ Read {total_rows} rows from {table_info['filename']}")
+    
+    data_info["active_table"] = table_info
+    data_info["active_table_last_size"] = table_info['size']
+    
+    # Force garbage collection
+    gc.collect()
+    
+    # Final memory check
+    final_memory = process.memory_info().rss / 1024 / 1024  # MB
+    logger.info(f"✅ Successfully loaded {table_info['filename']} with {total_rows} rows")
+    logger.info(f"📊 Final memory: {final_memory:.1f} MB (total delta: +{final_memory - initial_memory:.1f} MB)")
+    
+    return {
+        "filename": table_info['filename'],
+        "rows": total_rows,
+        "size_mb": round(table_info['size'] / 1024 / 1024, 2),
+        "timestamp": table_info['timestamp'],
+        "type": "active"
+    }
+
+def load_active_table_incremental(table_info, size_change):
+    """Load only new rows from the active table instead of full reload"""
+    try:
+        logger.info(f"📈 Attempting incremental load for {table_info['filename']} (+{size_change} bytes)")
+        
+        # Get current row count for this file
+        with db_lock:
+            current_rows = safe_get(conn.execute("""
+                SELECT COUNT(*) FROM layer_data WHERE source_file = ?
+            """, [table_info['filename']]).fetchone())
+        
+        if current_rows == 0:
+            logger.info("📄 No existing rows found, falling back to full load")
+            return False
+        
+        # Read only the new rows by skipping existing ones
+        try:
+            with db_lock:
+                # Get total rows in CSV file
+                total_csv_rows = safe_get(conn.execute(f"""
+                    SELECT COUNT(*) FROM read_csv_auto('{table_info['path']}', sample_size=1000)
+                """).fetchone())
                 
-                logger.info(f"📋 Found {len(csv_columns)} columns in CSV:")
-                for col in csv_columns:
-                    logger.info(f"   - {col[0]}: {col[1]}")
+                if total_csv_rows <= current_rows:
+                    logger.info(f"📊 CSV has {total_csv_rows} rows, DB has {current_rows} rows - no new data")
+                    # Update size to prevent constant rechecking
+                    data_info["active_table_last_size"] = table_info['size']
+                    return True
                 
-                # Load data directly with proper error handling
+                new_rows = total_csv_rows - current_rows
+                logger.info(f"📥 Loading {new_rows} new rows (CSV: {total_csv_rows}, DB: {current_rows})")
+                
+                # Load only the new rows using OFFSET
                 conn.execute(f"""
                     INSERT OR IGNORE INTO layer_data 
                     SELECT 
@@ -359,88 +902,38 @@ def load_active_table(table_info, is_reload=False):
                         TIME_DIFF,
                         VALUE,
                         DISPUTABLE,
-                        '{table_info['filename']}' as source_file
-                    FROM read_csv_auto('{table_info['path']}', 
-                        header=true,
-                        sample_size=10000,
-                        ignore_errors=true
-                    )
+                        '{table_info['filename']}' as source_file,
+                        NULL as POWER_OF_AGGR
+                    FROM (
+                        SELECT *, ROW_NUMBER() OVER () as rn
+                        FROM read_csv_auto('{table_info['path']}', header=true, ignore_errors=true)
+                    ) WHERE rn > {current_rows}
                 """)
                 
-                # Get the count of rows actually inserted
-                total_rows = conn.execute("""
+                # Verify new rows were added
+                final_rows = safe_get(conn.execute("""
                     SELECT COUNT(*) FROM layer_data WHERE source_file = ?
-                """, [table_info['filename']]).fetchone()[0]
+                """, [table_info['filename']]).fetchone())
                 
-                logger.info(f"✅ Successfully inserted {total_rows} rows from {table_info['filename']}")
+                actual_new_rows = final_rows - current_rows
+                logger.info(f"✅ Successfully added {actual_new_rows} new rows")
                 
-            except Exception as db_error:
-                logger.error(f"❌ Database error loading {table_info['filename']}: {db_error}")
+                # Calculate POWER_OF_AGGR for new data only
+                if actual_new_rows > 0:
+                    calculate_power_of_aggr(table_info['filename'])
                 
-                # Try a more permissive approach
-                try:
-                    logger.info("🔄 Trying fallback approach with all_varchar...")
-                    conn.execute(f"""
-                        INSERT OR IGNORE INTO layer_data 
-                        SELECT 
-                            CAST(REPORTER AS VARCHAR),
-                            CAST(QUERY_TYPE AS VARCHAR),
-                            CAST(QUERY_ID AS VARCHAR),
-                            CAST(AGGREGATE_METHOD AS VARCHAR),
-                            TRY_CAST(CYCLELIST AS BOOLEAN),
-                            TRY_CAST(POWER AS INTEGER),
-                            TRY_CAST(TIMESTAMP AS BIGINT),
-                            TRY_CAST(TRUSTED_VALUE AS DOUBLE),
-                            CAST(TX_HASH AS VARCHAR),
-                            TRY_CAST(CURRENT_TIME AS BIGINT),
-                            TRY_CAST(TIME_DIFF AS INTEGER),
-                            TRY_CAST(VALUE AS DOUBLE),
-                            TRY_CAST(DISPUTABLE AS BOOLEAN),
-                            '{table_info['filename']}' as source_file
-                        FROM read_csv_auto('{table_info['path']}', 
-                            header=true,
-                            all_varchar=true,
-                            sample_size=10000,
-                            ignore_errors=true
-                        )
-                    """)
-                    
-                    total_rows = conn.execute("""
-                        SELECT COUNT(*) FROM layer_data WHERE source_file = ?
-                    """, [table_info['filename']]).fetchone()[0]
-                    
-                    logger.info(f"✅ Fallback successful: inserted {total_rows} rows from {table_info['filename']}")
-                    
-                except Exception as fallback_error:
-                    logger.error(f"❌ Fallback also failed: {fallback_error}")
-                    return None
-        
-        logger.info(f"✅ Read {total_rows} rows from {table_info['filename']}")
-        
-        data_info["active_table"] = table_info
-        data_info["active_table_last_size"] = table_info['size']
-        
-        # Force garbage collection
-        gc.collect()
-        
-        # Final memory check
-        final_memory = process.memory_info().rss / 1024 / 1024  # MB
-        logger.info(f"✅ Successfully loaded {table_info['filename']} with {total_rows} rows")
-        logger.info(f"📊 Final memory: {final_memory:.1f} MB (total delta: +{final_memory - initial_memory:.1f} MB)")
-        
-        return {
-            "filename": table_info['filename'],
-            "rows": total_rows,
-            "size_mb": round(table_info['size'] / 1024 / 1024, 2),
-            "timestamp": table_info['timestamp'],
-            "type": "active"
-        }
-        
+                # Update tracking info
+                data_info["active_table_last_size"] = table_info['size']
+                
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Error in incremental load: {e}")
+            return False
+            
     except Exception as e:
-        logger.error(f"❌ Error loading active table {table_info['filename']}: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        logger.error(f"❌ Error setting up incremental load: {e}")
+        return False
 
 def load_csv_files():
     """Load CSV files with smart handling of historical vs active tables"""
@@ -465,7 +958,8 @@ def load_csv_files():
                     TIME_DIFF INTEGER,
                     VALUE DOUBLE,
                     DISPUTABLE BOOLEAN,
-                    source_file VARCHAR
+                    source_file VARCHAR,
+                    POWER_OF_AGGR BIGINT
                 )
             """)
             
@@ -475,6 +969,8 @@ def load_csv_files():
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_current_time ON layer_data(CURRENT_TIME)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_reporter ON layer_data(REPORTER)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_query_id ON layer_data(QUERY_ID)")
+                # Composite index for analytics queries (timestamp + reporter for efficient grouping)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp_reporter ON layer_data(TIMESTAMP, REPORTER)")
                 logger.info("✅ Created database indexes for better performance")
             except Exception as idx_error:
                 logger.warning(f"⚠️  Warning: Could not create some indexes: {idx_error}")
@@ -527,7 +1023,7 @@ def load_csv_files():
         
         # Get current total from database with thread safety
         with db_lock:
-            actual_total = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()[0]
+            actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
         
         data_info.update({
             "tables": tables_info,
@@ -550,22 +1046,61 @@ def load_csv_files():
 
 def periodic_reload():
     """Periodically check for updates in the active CSV file or new files"""
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+    last_heartbeat_refresh = 0
+    HEARTBEAT_INTERVAL = 60  # Force refresh every 60 seconds
+    
     while True:
         try:
             time.sleep(10)  # Check every 10 seconds
             
+            # Add debug logging every minute (6 cycles)
+            debug_cycle = getattr(periodic_reload, 'debug_cycle', 0) + 1
+            periodic_reload.debug_cycle = debug_cycle
+            
+            # Heartbeat refresh - force recalculation periodically
+            current_time = time.time()
+            if current_time - last_heartbeat_refresh >= HEARTBEAT_INTERVAL:
+                logger.info("💓 Heartbeat refresh - updating timestamp only (safe)")
+                try:
+                    # Just update the timestamp, don't recalculate to avoid race conditions
+                    data_info["last_updated"] = current_time
+                    
+                    # Update total count safely
+                    with db_lock:
+                        actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+                        data_info["total_rows"] = actual_total
+                    
+                    logger.info(f"💓 Heartbeat refresh completed - {formatNumber(actual_total)} total rows")
+                    last_heartbeat_refresh = current_time
+                    consecutive_errors = 0
+                    continue
+                except Exception as heartbeat_error:
+                    logger.error(f"❌ Heartbeat refresh error: {heartbeat_error}")
+                    # Don't count heartbeat errors toward consecutive errors
+                    last_heartbeat_refresh = current_time  # Reset to prevent spam
+            
             table_files = get_table_files()
             if not table_files:
+                logger.debug("📂 No table files found, continuing...")
                 continue
             
             # Get the most recent table (should be active)
             newest_table = table_files[-1]
             current_active = data_info.get("active_table")
             
+            # Debug logging every minute
+            if debug_cycle % 6 == 0:
+                logger.info(f"🔍 Periodic reload check #{debug_cycle//6}: newest={newest_table['filename']} ({newest_table['size']} bytes)")
+                if current_active:
+                    logger.info(f"   Current active: {current_active['filename']} (last_size: {data_info.get('active_table_last_size', 'unknown')})")
+            
             # Check if we have a new active table (newer timestamp)
             if not current_active or newest_table['timestamp'] > current_active['timestamp']:
                 logger.info("📥 Detected new active table, reloading data...")
                 load_csv_files()
+                consecutive_errors = 0  # Reset error count on success
                 continue
             
             # Check if the current active table has grown
@@ -573,41 +1108,188 @@ def periodic_reload():
                 newest_table['filename'] == current_active['filename'] and
                 newest_table['size'] != data_info["active_table_last_size"]):
                 
-                logger.info(f"📈 Active table {newest_table['filename']} has grown, reloading...")
-                result = load_active_table(newest_table, is_reload=True)
-                if result:
-                    # Update total count with thread safety
-                    with db_lock:
-                        actual_total = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()[0]
-                    data_info["total_rows"] = actual_total
-                    data_info["last_updated"] = time.time()
-                    logger.info(f"🔄 Reloaded active table, database now has {formatNumber(actual_total)} rows")
+                # Add additional validation before attempting reload
+                size_change = newest_table['size'] - data_info["active_table_last_size"]
+                min_change_threshold = 10000  # Only reload if file grew by at least 10KB (reasonable change)
+                
+                # Add debug logging to understand what's happening
+                logger.debug(f"📊 File size check: current={newest_table['size']}, last_processed={data_info['active_table_last_size']}, change={size_change}")
+                
+                # Handle case where last_processed is larger than current (stale data)
+                if size_change < 0:
+                    logger.info(f"🔄 File size decreased ({size_change} bytes), updating tracking to current size")
+                    data_info["active_table_last_size"] = newest_table['size']
+                    continue
+                
+                if size_change >= min_change_threshold:
+                    # Check memory before reloading
+                    process = psutil.Process()
+                    memory_mb = process.memory_info().rss / 1024 / 1024
+                    available_mb = psutil.virtual_memory().available / 1024 / 1024
+                    
+                    # Skip reload if memory is critically low or process is using too much
+                    if available_mb < 500 or memory_mb > 4000:
+                        logger.warning(f"⚠️  Skipping reload due to memory constraints (Process: {memory_mb:.0f} MB, Available: {available_mb:.0f} MB)")
+                        time.sleep(30)  # Wait before next check
+                        continue
+                    
+                    # Prevent concurrent reloads by checking if another reload is in progress
+                    if hasattr(data_info, 'reload_in_progress') and data_info.get('reload_in_progress', False):
+                        logger.info("🔄 Reload already in progress, skipping...")
+                        continue
+                    
+                    data_info['reload_in_progress'] = True
+                    
+                    logger.info(f"📈 Active table {newest_table['filename']} has grown by {size_change} bytes, reloading...")
+                    logger.info(f"💾 Memory before reload: {memory_mb:.1f} MB used, {available_mb:.0f} MB available")
+                    
+                    try:
+                        # Force garbage collection before reload
+                        gc.collect()
+                        
+                        # Try incremental load instead of full reload for better performance
+                        result = load_active_table_incremental(newest_table, size_change)
+                        if not result:
+                            # Fall back to full reload if incremental fails
+                            logger.info("🔄 Incremental load failed, falling back to full reload...")
+                            result = load_active_table(newest_table, is_reload=True)
+                        
+                        if result:
+                            # Update total count with thread safety
+                            with db_lock:
+                                actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+                            data_info["total_rows"] = actual_total
+                            data_info["last_updated"] = time.time()
+                            logger.info(f"🔄 Reloaded active table, database now has {formatNumber(actual_total)} rows")
+                            consecutive_errors = 0  # Reset error count on success
+                        else:
+                            logger.warning(f"⚠️  Failed to reload active table {newest_table['filename']}, will retry on next check")
+                            # Don't count this as an error since load_active_table already has retry logic
+                    finally:
+                        data_info['reload_in_progress'] = False
+                else:
+                    logger.debug(f"📝 Active table size change too small ({size_change} bytes), skipping reload")
+                    # Update the size anyway to prevent constant small change detection
+                    data_info["active_table_last_size"] = newest_table['size']
                 
         except Exception as e:
-            logger.error(f"❌ Error in periodic reload: {e}")
-            import traceback
-            traceback.print_exc()
+            consecutive_errors += 1
+            logger.error(f"❌ Error in periodic reload (attempt {consecutive_errors}/{max_consecutive_errors}): {e}")
+            
+            if consecutive_errors >= max_consecutive_errors:
+                logger.error(f"💥 Too many consecutive errors in periodic reload, backing off...")
+                time.sleep(60)  # Wait 60 seconds before trying again
+                consecutive_errors = 0  # Reset counter after backoff
+            else:
+                import traceback
+                traceback.print_exc()
 
 # Revert to the original startup event pattern
 @app.on_event("startup")
 async def startup_event():
     """Initialize data on startup"""
+    global reporter_fetcher
     logger.info("🚀 Starting Layer Values Dashboard")
     # Load data on startup
     load_csv_files()
+    
+    # Recalculate POWER_OF_AGGR for all existing data to ensure consistency
+    logger.info("🔄 Recalculating POWER_OF_AGGR for all existing data...")
+    calculate_power_of_aggr()
+    
     # Start periodic reload thread
     reload_thread = threading.Thread(target=periodic_reload, daemon=True)
     reload_thread.start()
+    logger.info("🔄 Started periodic reload thread with memory safety")
+    
+    # Create reporters table first to ensure API endpoints work
+    logger.info("🏗️  Creating reporters table schema...")
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS reporters (
+                address VARCHAR PRIMARY KEY,
+                moniker VARCHAR,
+                commission_rate VARCHAR,
+                jailed BOOLEAN DEFAULT FALSE,
+                jailed_until TIMESTAMP,
+                last_updated TIMESTAMP,
+                min_tokens_required BIGINT,
+                power INTEGER,
+                fetched_at TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Create indexes for better performance
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reporters_moniker ON reporters(moniker)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reporters_power ON reporters(power)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reporters_jailed ON reporters(jailed)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_reporters_fetched_at ON reporters(fetched_at)")
+        
+        logger.info("✅ Reporters table schema created")
+    except Exception as e:
+        logger.error(f"❌ Failed to create reporters table: {e}")
+
+    # Note: Maximal power data is now stored in CSV file, no database table needed
+    logger.info("🔋 Maximal power tracking will use CSV file storage")
+
+    # Initialize and start reporter fetcher if available
+    if REPORTER_FETCHER_AVAILABLE:
+        try:
+            # Path to the layerd binary (relative to backend directory)
+            binary_path = Path("../layerd")
+            if binary_path.exists():
+                logger.info("🔗 Initializing reporter fetcher...")
+                reporter_fetcher = ReporterFetcher(
+                    str(binary_path), 
+                    update_interval=60,
+                    rpc_url=config.layer_rpc_url  # Add this parameter
+                )
+                
+                # Do initial fetch to populate reporters table
+                logger.info("📡 Performing initial reporter data fetch...")
+                success = reporter_fetcher.fetch_and_store(conn)
+                if success:
+                    logger.info("✅ Initial reporter data fetch completed")
+                else:
+                    logger.warning("⚠️  Initial reporter data fetch failed - will retry periodically")
+                
+                # Initialize historical maximal power data (7 days back)
+                try:
+                    reporter_fetcher.initialize_historical_maximal_power(conn, days_back=7)
+                    logger.info("🔋 Maximal power historical data initialization completed")
+                except Exception as e:
+                    logger.warning(f"⚠️  Could not initialize historical maximal power data: {e}")
+                
+                # Start periodic updates
+                reporter_fetcher.start_periodic_updates(conn)
+                logger.info("🚀 Reporter fetcher started successfully")
+            else:
+                logger.warning(f"⚠️  Binary not found at {binary_path}, reporter fetcher disabled")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize reporter fetcher: {e}")
+            reporter_fetcher = None
+    else:
+        logger.info("ℹ️  Reporter fetcher not available, skipping initialization")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
+    global reporter_fetcher
     logger.info("🛑 Shutting down Layer Values Dashboard")
+    
+    # Stop reporter fetcher if running
+    if reporter_fetcher:
+        try:
+            reporter_fetcher.stop_periodic_updates()
+            logger.info("🛑 Reporter fetcher stopped")
+        except Exception as e:
+            logger.error(f"❌ Error stopping reporter fetcher: {e}")
 
 @app.get("/")
 async def root_redirect():
     """Redirect root to dashboard"""
-    return {"message": "Layer Values Dashboard API", "dashboard_url": "/dashboard/"}
+    return {"message": "Layer Values Dashboard API", "dashboard_url": "/dashboard-mainnet/"}
 
 # Dashboard sub-application routes
 @dashboard_app.get("/")
@@ -621,9 +1303,26 @@ async def serve_frontend():
     with open(html_path, 'r', encoding='utf-8') as f:
         html_content = f.read()
     
-    # Update static asset paths to be relative to /dashboard/
-    html_content = html_content.replace('href="./static/', 'href="/dashboard/static/')
-    html_content = html_content.replace('src="./static/', 'src="/dashboard/static/')
+    # Update static asset paths to be relative to /dashboard-mainnet/
+    html_content = html_content.replace('href="./static/', 'href="/dashboard-mainnet/static/')
+    html_content = html_content.replace('src="./static/', 'src="/dashboard-mainnet/static/')
+    
+    return HTMLResponse(content=html_content)
+
+@dashboard_app.get("/reporters")
+async def serve_reporters_page():
+    """Serve the reporters page"""
+    html_path = Path("../frontend/reporters.html")
+    if not html_path.exists():
+        raise HTTPException(status_code=404, detail="Reporters page not found")
+    
+    # Read the HTML content and update asset paths
+    with open(html_path, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+    
+    # Update static asset paths to be relative to /dashboard-mainnet/
+    html_content = html_content.replace('href="./static/', 'href="/dashboard-mainnet/static/')
+    html_content = html_content.replace('src="./static/', 'src="/dashboard-mainnet/static/')
     
     return HTMLResponse(content=html_content)
 
@@ -648,6 +1347,7 @@ async def get_info():
 
 @dashboard_app.get("/api/data")
 async def get_data(
+    request: Request,
     limit: int = Query(100, ge=1, le=1000),  # Reduced max limit
     offset: int = Query(0, ge=0),
     reporter: Optional[str] = None,
@@ -660,6 +1360,21 @@ async def get_data(
 ):
     """Get paginated data with optional filters - defaults to most recent 1000 records on first load"""
     try:
+        # Check if force refresh is requested via cache buster
+        cache_buster = request.query_params.get('_t')
+        if cache_buster:
+            global refresh_in_progress
+            with refresh_lock:
+                if not refresh_in_progress:
+                    refresh_in_progress = True
+                    try:
+                        logger.info("🔄 Force refresh triggered by cache buster in data")
+                        calculate_power_of_aggr(recent_only=True)  # Only update recent data for speed
+                        data_info["last_updated"] = time.time()
+                    finally:
+                        refresh_in_progress = False
+                else:
+                    logger.info("⏭️ Skipping refresh - already in progress")
         # Build WHERE clause
         where_conditions = []
         params = {}
@@ -695,13 +1410,21 @@ async def get_data(
             where_conditions.append("DISPUTABLE = true")
             where_conditions.append(f"({current_time_ms} - TIMESTAMP) < {hours_72_ms}")
         
+        # Add safe timestamp filter to exclude incomplete blocks
+        safe_filter, safe_params = get_safe_timestamp_filter()
+        where_conditions.append(safe_filter)
+        
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
+        # Combine all parameters
+        all_params = list(params.values()) + safe_params
         
         # Use thread-safe database access
         with db_lock:
             try:
                 # First check if we have any data at all
-                total_in_db = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()[0]
+                total_in_db_result = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()
+                total_in_db = safe_get(total_in_db_result)
                 logger.info(f"🔍 Debug: Total rows in database: {total_in_db}")
                 
                 if total_in_db == 0:
@@ -720,7 +1443,8 @@ async def get_data(
                     FROM layer_data 
                     WHERE {where_clause}
                 """
-                total = conn.execute(count_query, list(params.values())).fetchone()[0]
+                total_result = conn.execute(count_query, all_params).fetchone()
+                total = safe_get(total_result)
                 logger.info(f"🔍 Debug: Filtered total: {total}")
                 
                 # Calculate actual limit and offset
@@ -735,7 +1459,7 @@ async def get_data(
                     WHERE {where_clause}
                     ORDER BY TIMESTAMP DESC
                     LIMIT {actual_limit + actual_offset}
-                """, list(params.values()))
+                """, all_params)
                 
                 # Get the paginated data from the temp table
                 result = conn.execute(f"""
@@ -781,12 +1505,19 @@ async def get_data(
                     logger.info(f"🔍 Debug: First row keys: {list(data[0].keys())}")
                     logger.info(f"🔍 Debug: First row sample: {data[0]}")
                 
-                return {
+                response_data = {
                     "data": data,
                     "total": total,
                     "limit": actual_limit,
                     "offset": actual_offset
                 }
+                
+                # Return with cache headers to prevent stale data on browser reload
+                response = JSONResponse(content=response_data)
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                response.headers["Pragma"] = "no-cache" 
+                response.headers["Expires"] = "0"
+                return response
                 
             except Exception as db_error:
                 logger.error(f"❌ Database error in get_data: {db_error}")
@@ -800,60 +1531,113 @@ async def get_data(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@dashboard_app.post("/api/refresh")
+async def force_refresh():
+    """Force refresh all data - recalculates everything"""
+    try:
+        global refresh_in_progress
+        with refresh_lock:
+            if refresh_in_progress:
+                return {
+                    "status": "skipped", 
+                    "message": "Refresh already in progress",
+                    "last_updated": data_info.get("last_updated")
+                }
+            
+            refresh_in_progress = True
+            
+        try:
+            logger.info("🔄 Force refresh requested via API")
+            
+            # Force recalculation of POWER_OF_AGGR (recent only for speed)
+            calculate_power_of_aggr(recent_only=True)
+            
+            # Update last_updated timestamp
+            data_info["last_updated"] = time.time()
+        finally:
+            refresh_in_progress = False
+        
+        # Get fresh counts
+        with db_lock:
+            actual_total = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+            data_info["total_rows"] = actual_total
+        
+        logger.info(f"✅ Force refresh completed - {formatNumber(actual_total)} total rows")
+        
+        return {
+            "status": "success", 
+            "message": "Data refreshed successfully",
+            "total_rows": actual_total,
+            "last_updated": data_info["last_updated"]
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Force refresh error: {e}")
+        raise HTTPException(status_code=500, detail=f"Force refresh failed: {str(e)}")
+
 @dashboard_app.get("/api/stats")
-async def get_stats():
+async def get_stats(request: Request):
     """Get statistical information about the data"""
     try:
+        # Check if force refresh is requested via cache buster
+        cache_buster = request.query_params.get('_t')
+        if cache_buster:
+            global refresh_in_progress
+            with refresh_lock:
+                if not refresh_in_progress:
+                    refresh_in_progress = True
+                    try:
+                        logger.info("🔄 Force refresh triggered by cache buster in stats")
+                        calculate_power_of_aggr(recent_only=True)  # Only update recent data for speed
+                        data_info["last_updated"] = time.time()
+                    finally:
+                        refresh_in_progress = False
+                else:
+                    logger.info("⏭️ Skipping refresh - already in progress")
+        
         stats = {}
         
         # Use thread-safe database access
         with db_lock:
-            # Basic counts
-            stats["total_rows"] = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()[0]
-            stats["unique_reporters"] = conn.execute("SELECT COUNT(DISTINCT REPORTER) FROM layer_data").fetchone()[0]
-            stats["unique_query_types"] = conn.execute("SELECT COUNT(DISTINCT QUERY_TYPE) FROM layer_data").fetchone()[0]
+            # Get safe timestamp filter for consistent data filtering
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Basic counts using safe timestamp filter
+            stats["total_rows"] = safe_get(conn.execute(f"SELECT COUNT(*) FROM layer_data WHERE {safe_filter}", safe_params).fetchone())
+            stats["unique_reporters"] = safe_get(conn.execute(f"SELECT COUNT(DISTINCT REPORTER) FROM layer_data WHERE {safe_filter}", safe_params).fetchone())
+            stats["unique_query_types"] = safe_get(conn.execute(f"SELECT COUNT(DISTINCT QUERY_TYPE) FROM layer_data WHERE {safe_filter}", safe_params).fetchone())
             
             # Unique query IDs in past 30 days
             days_30_ms = 30 * 24 * 60 * 60 * 1000  # 30 days in milliseconds
             current_time_ms = int(time.time() * 1000)
             start_time_30d = current_time_ms - days_30_ms
             
-            unique_query_ids_30d = conn.execute("""
+            unique_query_ids_30d = safe_get(conn.execute(f"""
                 SELECT COUNT(DISTINCT QUERY_ID) 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ?
-            """, [start_time_30d]).fetchone()[0]
+                WHERE TIMESTAMP >= ? AND {safe_filter}
+            """, [start_time_30d] + safe_params).fetchone())
             
             stats["unique_query_ids_30d"] = unique_query_ids_30d
             
-            # Average agreement for most recent query ID
-            recent_query_agreement = conn.execute("""
-                WITH recent_query AS (
-                    SELECT QUERY_ID
-                    FROM layer_data
-                    ORDER BY TIMESTAMP DESC
-                    LIMIT 1
-                ),
-                recent_timestamp AS (
-                    SELECT TIMESTAMP
-                    FROM layer_data
-                    ORDER BY TIMESTAMP DESC
-                    LIMIT 1
-                )
+            # Average agreement calculation - simplified and more robust
+            # Calculate agreement percentage for all records where both values exist
+            average_agreement_result = conn.execute("""
                 SELECT 
                     AVG(CASE 
-                        WHEN ld.TRUSTED_VALUE != 0 THEN 
-                            (1 - ABS((ld.VALUE - ld.TRUSTED_VALUE) / ld.TRUSTED_VALUE)) * 100
+                        WHEN VALUE = TRUSTED_VALUE THEN 100.0
+                        WHEN TRUSTED_VALUE != 0 THEN 
+                            GREATEST(0, (1 - ABS((VALUE - TRUSTED_VALUE) / TRUSTED_VALUE)) * 100)
                         ELSE NULL 
                     END) as avg_agreement
-                FROM recent_query rq
-                JOIN recent_timestamp rt ON 1=1
-                JOIN layer_data ld ON rq.QUERY_ID = ld.QUERY_ID AND rt.TIMESTAMP = ld.TIMESTAMP
-                WHERE ld.TRUSTED_VALUE != 0
+                FROM layer_data
+                WHERE VALUE IS NOT NULL 
+                AND TRUSTED_VALUE IS NOT NULL 
+                AND TRUSTED_VALUE != 0
             """).fetchone()
             
-            if recent_query_agreement and recent_query_agreement[0] is not None:
-                stats["average_agreement"] = round(recent_query_agreement[0], 2)
+            if average_agreement_result and len(average_agreement_result) > 0 and average_agreement_result[0] is not None:
+                stats["average_agreement"] = round(float(average_agreement_result[0]), 2)
             else:
                 stats["average_agreement"] = None
             
@@ -867,44 +1651,49 @@ async def get_stats():
             """).fetchone()
             
             stats["value_stats"] = {
-                "min": value_stats[0],
-                "max": value_stats[1],
-                "median": value_stats[2]
+                "min": safe_get(value_stats, 0, 0),
+                "max": safe_get(value_stats, 1, 0),
+                "median": safe_get(value_stats, 2, 0)
             }
             
-            # Total reporter power for the most recent timestamp
-            recent_timestamp_power = conn.execute("""
-                WITH recent_timestamp AS (
-                    SELECT TIMESTAMP 
-                    FROM layer_data 
-                    ORDER BY TIMESTAMP DESC 
-                    LIMIT 1
-                )
-                SELECT 
-                    rt.TIMESTAMP,
-                    SUM(ld.POWER) as total_power,
-                    COUNT(*) as reporter_count
-                FROM recent_timestamp rt
-                JOIN layer_data ld ON rt.TIMESTAMP = ld.TIMESTAMP
-                GROUP BY rt.TIMESTAMP
-            """).fetchone()
+            # Active reporter calculation - unique reporters who reported in last 24h
+            hours_24_ms = 24 * 60 * 60 * 1000
+            current_time_ms = int(time.time() * 1000)
+            start_time_24h = current_time_ms - hours_24_ms
             
-            if recent_timestamp_power:
-                stats["total_reporter_power"] = recent_timestamp_power[1]
-                stats["recent_timestamp"] = recent_timestamp_power[0]
-                stats["recent_reporter_count"] = recent_timestamp_power[2]
+            # Get power of reporters who have been active in last 24h (from registry, not layer_data)
+            active_reporters_power = conn.execute("""
+                SELECT 
+                    COUNT(DISTINCT r.address) as active_reporter_count,
+                    COALESCE(SUM(r.power), 0) as total_active_power
+                FROM reporters r
+                WHERE r.address IN (
+                    SELECT DISTINCT REPORTER 
+                    FROM layer_data 
+                    WHERE CURRENT_TIME >= ?
+                )
+            """, [start_time_24h]).fetchone()
+            
+            if active_reporters_power:
+                stats["active_reporter_power"] = safe_get(active_reporters_power, 1, 0)
+                stats["active_reporter_count"] = safe_get(active_reporters_power, 0, 0)
+                logger.info(f"📈 Active reporters in 24h: {stats['active_reporter_count']} with total power: {stats['active_reporter_power']}")
             else:
-                stats["total_reporter_power"] = 0
-                stats["recent_timestamp"] = None
-                stats["recent_reporter_count"] = 0
+                stats["active_reporter_power"] = 0
+                stats["active_reporter_count"] = 0
+            
+            # Legacy field for compatibility (never use timestamp-based calculation from layer_data)
+            stats["total_reporter_power"] = None  # Signal frontend to not use this
+            stats["recent_timestamp"] = None
+            stats["recent_reporter_count"] = 0
             
             # Recent activity (last hour)
             recent_count = conn.execute("""
                 SELECT COUNT(*) FROM layer_data 
                 WHERE CURRENT_TIME > (SELECT MAX(CURRENT_TIME) - 3600000 FROM layer_data)
-            """).fetchone()[0]
+            """).fetchone()
             
-            stats["recent_activity"] = recent_count
+            stats["recent_activity"] = safe_get(recent_count)
             
             # Questionable values calculation
             # Get current time in milliseconds (since TIMESTAMP appears to be in milliseconds)
@@ -923,9 +1712,9 @@ async def get_stats():
             """, [current_time_ms, hours_48_ms, current_time_ms, hours_72_ms]).fetchone()
             
             stats["questionable_values"] = {
-                "total": questionable_stats[0],
-                "urgent": questionable_stats[1],  # Count within 48 hours
-                "has_urgent": questionable_stats[1] > 0  # Boolean for urgent styling
+                "total": safe_get(questionable_stats, 0, 0),
+                "urgent": safe_get(questionable_stats, 1, 0),  # Count within 48 hours
+                "has_urgent": safe_get(questionable_stats, 1, 0) > 0  # Boolean for urgent styling
             }
             
             # Top reporters
@@ -960,7 +1749,12 @@ async def get_stats():
             
             stats["query_types"] = query_types
         
-        return stats
+        # Return with cache headers to prevent stale data on browser reload
+        response = JSONResponse(content=stats)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
         
     except Exception as e:
         logger.error(f"❌ Stats error: {e}")
@@ -968,12 +1762,12 @@ async def get_stats():
 
 @dashboard_app.get("/api/analytics")
 async def get_analytics(
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$"),
-    request: Request = None
+    request: Request,
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get analytics data with cellular optimization"""
     try:
-        user_agent = request.headers.get("user-agent", "") if request else ""
+        user_agent = request.headers.get("user-agent", "")
         is_mobile = any(mobile in user_agent.lower() for mobile in ["mobile", "android", "iphone", "ipad"])
         is_cellular = any(carrier in user_agent.lower() for carrier in [
             "verizon", "att", "t-mobile", "sprint", "vodafone", "orange"
@@ -984,39 +1778,39 @@ async def get_analytics(
         # Aggressive optimization for cellular
         if is_cellular:
             if timeframe == "24h":
-                interval_ms = 4 * 60 * 60 * 1000  # 4 hours instead of 1-2
-                num_buckets = 6
-            elif timeframe == "7d":
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
-            elif timeframe == "30d":
-                interval_ms = 10 * 24 * 60 * 60 * 1000  # 10 days instead of 3-5
-                num_buckets = 3
-        elif is_mobile:
-            # Standard mobile optimization
-            if timeframe == "24h":
-                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
+                interval_ms = 2 * 60 * 60 * 1000  # 2 hours instead of 4
                 num_buckets = 12
             elif timeframe == "7d":
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 12 * 60 * 60 * 1000  # 12 hours
+                num_buckets = 14
             elif timeframe == "30d":
-                interval_ms = 5 * 24 * 60 * 60 * 1000  # 5 days
+                interval_ms = 5 * 24 * 60 * 60 * 1000  # 5 days instead of 10
                 num_buckets = 6
-        else:
-            # Desktop gets full resolution
+        elif is_mobile:
+            # Standard mobile optimization
             if timeframe == "24h":
                 interval_ms = 1 * 60 * 60 * 1000  # 1 hour
                 num_buckets = 24
             elif timeframe == "7d":
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 12 * 60 * 60 * 1000  # 12 hours
+                num_buckets = 14
             elif timeframe == "30d":
-                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
-                num_buckets = 10
+                interval_ms = 2 * 24 * 60 * 60 * 1000  # 2 days
+                num_buckets = 15
+        else:
+            # Desktop gets higher resolution
+            if timeframe == "24h":
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
+            elif timeframe == "7d":
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
+            elif timeframe == "30d":
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
         
         current_time_ms = int(time.time() * 1000)
-        start_time = current_time_ms - (num_buckets * interval_ms)
+        start_time = current_time_ms - (int(num_buckets) * int(interval_ms))
         
         # Use optimized query with shorter timeout for cellular
         with db_lock:
@@ -1085,33 +1879,166 @@ async def get_analytics(
         logger.error(f"❌ Analytics error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Analytics processing failed: {str(e)}")
 
+@dashboard_app.get("/search")
+async def serve_search_page():
+    """Serve the search page"""
+    try:
+        # Get the correct path relative to the backend directory
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        search_html_path = os.path.join(current_dir, "..", "frontend", "search.html")
+        
+        with open(search_html_path, "r") as f:
+            content = f.read()
+        return HTMLResponse(content=content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Search page not found")
+
 @dashboard_app.get("/api/search")
 async def search_data(
     q: str = Query(..., min_length=1),
-    limit: int = Query(50, ge=1, le=1000)
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
 ):
-    """Search across all text fields"""
+    """Enhanced search across all text fields with statistics and insights"""
     try:
-        search_query = f"""
-            SELECT * FROM layer_data 
-            WHERE 
-                REPORTER LIKE '%{q}%' OR
-                QUERY_ID LIKE '%{q}%' OR
-                TX_HASH LIKE '%{q}%' OR
-                CAST(VALUE AS VARCHAR) LIKE '%{q}%'
-            ORDER BY CURRENT_TIME DESC
-            LIMIT {limit}
-        """
-        
-        results = conn.execute(search_query).df()
-        
-        return {
-            "results": results.to_dict(orient="records"),
-            "count": len(results),
-            "query": q
-        }
+        with db_lock:
+            # Get safe timestamp filter to exclude incomplete blocks
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Main search query with pagination
+            search_query = f"""
+                SELECT * FROM layer_data 
+                WHERE (
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
+                ORDER BY TIMESTAMP DESC
+                LIMIT {limit} OFFSET {offset}
+            """
+            
+            results = conn.execute(search_query, safe_params).df()
+            
+            # Get total count for pagination
+            count_query = f"""
+                SELECT COUNT(*) as total FROM layer_data 
+                WHERE (
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
+            """
+            
+            total_count = safe_get(conn.execute(count_query, safe_params).fetchone())
+            
+            # Generate statistics and insights
+            stats_query = f"""
+                SELECT 
+                    COUNT(*) as total_matches,
+                    COUNT(DISTINCT REPORTER) as unique_reporters,
+                    COUNT(DISTINCT QUERY_ID) as unique_query_ids,
+                    MIN(VALUE) as min_value,
+                    MAX(VALUE) as max_value,
+                    AVG(CASE WHEN VALUE = TRUSTED_VALUE THEN 1.0 ELSE 0.0 END) as avg_agreement,
+                    MIN(TIMESTAMP) as oldest_timestamp,
+                    MAX(TIMESTAMP) as newest_timestamp,
+                    SUM(POWER) as total_power
+                FROM layer_data 
+                WHERE (
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
+            """
+            
+            stats_result = conn.execute(stats_query, safe_params).fetchone()
+            
+            # Get top reporter for this search
+            top_reporter_query = f"""
+                SELECT REPORTER, COUNT(*) as count
+                FROM layer_data 
+                WHERE (
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
+                GROUP BY REPORTER
+                ORDER BY count DESC
+                LIMIT 1
+            """
+            
+            top_reporter_result = conn.execute(top_reporter_query, safe_params).fetchone()
+            
+            # Get top query ID for this search
+            top_query_id_query = f"""
+                SELECT QUERY_ID, COUNT(*) as count
+                FROM layer_data 
+                WHERE (
+                    REPORTER LIKE '%{q}%' OR
+                    QUERY_ID LIKE '%{q}%' OR
+                    TX_HASH LIKE '%{q}%' OR
+                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                ) AND {safe_filter}
+                GROUP BY QUERY_ID
+                ORDER BY count DESC
+                LIMIT 1
+            """
+            
+            top_query_id_result = conn.execute(top_query_id_query, safe_params).fetchone()
+            
+            # Build stats object
+            stats = {
+                "total_matches": safe_get(stats_result, 0, 0),
+                "unique_reporters": safe_get(stats_result, 1, 0),
+                "unique_query_ids": safe_get(stats_result, 2, 0),
+                "value_range": {
+                    "min": safe_get(stats_result, 3),
+                    "max": safe_get(stats_result, 4)
+                } if safe_get(stats_result, 3) is not None and safe_get(stats_result, 4) is not None else None,
+                "avg_agreement": safe_get(stats_result, 5,),
+                "time_range": {
+                    "oldest": safe_get(stats_result, 6),
+                    "newest": safe_get(stats_result, 7)
+                } if safe_get(stats_result, 6) and safe_get(stats_result, 7) else None,
+                "power_stats": {
+                    "total": safe_get(stats_result, 8, 0)
+                },
+                "top_reporter": {
+                    "reporter": top_reporter_result[0],
+                    "count": top_reporter_result[1]
+                } if top_reporter_result else None,
+                "top_query_id": {
+                    "query_id": top_query_id_result[0],
+                    "count": top_query_id_result[1]
+                } if top_query_id_result else None
+            }
+            
+            response_data = {
+                "data": results.to_dict(orient="records"),
+                "stats": stats,
+                "pagination": {
+                    "total": total_count,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": offset + limit < total_count
+                },
+                "query": q
+            }
+            
+            # Return with cache headers to prevent stale data on browser reload
+            response = JSONResponse(content=response_data)
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
         
     except Exception as e:
+        logger.error(f"Search error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @dashboard_app.get("/api/query-analytics")
@@ -1132,39 +2059,42 @@ async def get_query_analytics(
         with db_lock:
             if timeframe == "24h":
                 logger.info("🕒 Processing 24h query analytics...")
-                # 2-hour intervals over past 24 hours
+                # 30-minute intervals over past 24 hours
                 hours_24_ms = 24 * 60 * 60 * 1000
-                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
-                num_buckets = 12
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
                 
             elif timeframe == "7d":
                 logger.info("📅 Processing 7d query analytics...")
-                # Daily intervals over past 7 days
+                # 6-hour intervals over past 7 days
                 days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
                 start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d query analytics...")
-                # 3-day intervals over past 30 days
+                # Daily intervals over past 30 days
                 days_30_ms = 30 * 24 * 60 * 60 * 1000
-                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
-                num_buckets = 10
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
                 start_time = current_time_ms - days_30_ms
             
             logger.info(f"📈 Querying query ID data from {start_time} to {current_time_ms}")
             
-            # Get top query IDs in the timeframe
-            top_query_ids = conn.execute("""
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Get top query IDs in the timeframe with safe timestamp filtering
+            top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ? AND TIMESTAMP < ?
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
                 LIMIT 10
-            """, [start_time, current_time_ms]).fetchall()
+            """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_query_ids:
                 return {
@@ -1188,15 +2118,15 @@ async def get_query_analytics(
                     "short_name": query_id[:12] + "..." if len(query_id) > 15 else query_id
                 })
                 
-                # Get bucketed data for this query ID
-                results = conn.execute("""
+                # Get bucketed data for this query ID with safe timestamp filtering
+                results = conn.execute(f"""
                     WITH time_buckets AS (
                         SELECT 
                             TIMESTAMP,
                             FLOOR((TIMESTAMP - ?) / ?) as bucket_id
                         FROM layer_data 
                         WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
-                        AND QUERY_ID = ?
+                        AND QUERY_ID = ? AND {safe_filter}
                     )
                     SELECT 
                         bucket_id,
@@ -1204,7 +2134,7 @@ async def get_query_analytics(
                     FROM time_buckets
                     GROUP BY bucket_id
                     ORDER BY bucket_id
-                """, [start_time, interval_ms, start_time, current_time_ms, query_id]).fetchall()
+                """, [start_time, interval_ms, start_time, current_time_ms, query_id] + safe_params).fetchall()
                 
                 # Create complete time series for this query ID
                 buckets = []
@@ -1265,7 +2195,7 @@ async def get_reporter_analytics(
 ):
     """Get analytics data by reporter for different timeframes"""
     try:
-        logger.info(f"�� Reporter analytics request: timeframe={timeframe}")
+        logger.info(f"🔄 Reporter analytics request: timeframe={timeframe}")
         current_time_ms = int(time.time() * 1000)
         
         # Add memory usage logging
@@ -1277,39 +2207,42 @@ async def get_reporter_analytics(
         with db_lock:
             if timeframe == "24h":
                 logger.info("🕒 Processing 24h reporter analytics...")
-                # 2-hour intervals over past 24 hours
+                # 30-minute intervals over past 24 hours
                 hours_24_ms = 24 * 60 * 60 * 1000
-                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
-                num_buckets = 12
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
                 
             elif timeframe == "7d":
                 logger.info("📅 Processing 7d reporter analytics...")
-                # Daily intervals over past 7 days
+                # 6-hour intervals over past 7 days
                 days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
                 start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d reporter analytics...")
-                # 3-day intervals over past 30 days
+                # Daily intervals over past 30 days
                 days_30_ms = 30 * 24 * 60 * 60 * 1000
-                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
-                num_buckets = 10
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
                 start_time = current_time_ms - days_30_ms
             
             logger.info(f"📈 Querying reporter data from {start_time} to {current_time_ms}")
             
-            # Get top reporters in the timeframe
-            top_reporters = conn.execute("""
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Get top reporters in the timeframe with safe timestamp filtering
+            top_reporters = conn.execute(f"""
                 SELECT REPORTER, COUNT(*) as count 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ? AND TIMESTAMP < ?
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
                 GROUP BY REPORTER 
                 ORDER BY count DESC 
                 LIMIT 15
-            """, [start_time, current_time_ms]).fetchall()
+            """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_reporters:
                 return {
@@ -1683,40 +2616,42 @@ async def get_agreement_analytics(
         with db_lock:
             if timeframe == "24h":
                 logger.info("🕒 Processing 24h agreement analytics...")
-                # 2-hour intervals over past 24 hours
+                # 30-minute intervals over past 24 hours
                 hours_24_ms = 24 * 60 * 60 * 1000
-                interval_ms = 2 * 60 * 60 * 1000  # 2 hours
-                num_buckets = 12
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
                 
             elif timeframe == "7d":
                 logger.info("📅 Processing 7d agreement analytics...")
-                # Daily intervals over past 7 days
+                # 6-hour intervals over past 7 days
                 days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 24 * 60 * 60 * 1000  # 1 day
-                num_buckets = 7
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
                 start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d agreement analytics...")
-                # 3-day intervals over past 30 days
+                # Daily intervals over past 30 days
                 days_30_ms = 30 * 24 * 60 * 60 * 1000
-                interval_ms = 3 * 24 * 60 * 60 * 1000  # 3 days
-                num_buckets = 10
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
                 start_time = current_time_ms - days_30_ms
             
             logger.info(f"📈 Querying agreement data from {start_time} to {current_time_ms}")
             
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
             # Get top query IDs in the timeframe
-            top_query_ids = conn.execute("""
+            top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ? AND TIMESTAMP < ?
-                AND TRUSTED_VALUE != 0
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND TRUSTED_VALUE != 0 AND {safe_filter}
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
                 LIMIT 10
-            """, [start_time, current_time_ms]).fetchall()
+            """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_query_ids:
                 return {
@@ -1740,8 +2675,8 @@ async def get_agreement_analytics(
                     "short_name": query_id[:12] + "..." if len(query_id) > 15 else query_id
                 })
                 
-                # Get bucketed deviation data for this query ID
-                results = conn.execute("""
+                # Get bucketed deviation data for this query ID with safe timestamp filtering
+                results = conn.execute(f"""
                     WITH time_buckets AS (
                         SELECT 
                             TIMESTAMP,
@@ -1749,8 +2684,7 @@ async def get_agreement_analytics(
                             ABS((VALUE - TRUSTED_VALUE) / TRUSTED_VALUE) * 100 as deviation_percent
                         FROM layer_data 
                         WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
-                        AND QUERY_ID = ?
-                        AND TRUSTED_VALUE != 0
+                        AND QUERY_ID = ? AND TRUSTED_VALUE != 0 AND {safe_filter}
                     )
                     SELECT 
                         bucket_id,
@@ -1758,7 +2692,7 @@ async def get_agreement_analytics(
                     FROM time_buckets
                     GROUP BY bucket_id
                     ORDER BY bucket_id
-                """, [start_time, interval_ms, start_time, current_time_ms, query_id]).fetchall()
+                """, [start_time, interval_ms, start_time, current_time_ms, query_id] + safe_params).fetchall()
                 
                 # Create complete time series for this query ID
                 buckets = []
@@ -1813,11 +2747,534 @@ async def get_agreement_analytics(
             
         raise HTTPException(status_code=500, detail=f"Agreement analytics processing failed: {str(e)}")
 
+# ===========================================
+# REPORTER API ENDPOINTS
+# ===========================================
+
+@dashboard_app.get("/api/reporters")
+async def get_reporters(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = None,
+    jailed_only: Optional[bool] = None,
+    sort_by: Optional[str] = Query("power", regex="^(power|moniker|commission_rate|last_updated)$")
+):
+    """Get paginated list of reporters with optional filtering"""
+    try:
+        # Build WHERE clause
+        where_conditions = []
+        params = {}
+        
+        if search:
+            where_conditions.append("(moniker LIKE ? OR address LIKE ?)")
+            params['search1'] = f"%{search}%"
+            params['search2'] = f"%{search}%"
+        
+        if jailed_only:
+            where_conditions.append("jailed = true")
+        
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
+        # Determine sort order
+        sort_order = "DESC" if sort_by == "power" else "ASC"
+        
+        with db_lock:
+            # Get total count
+            count_query = f"SELECT COUNT(*) FROM reporters WHERE {where_clause}"
+            total = safe_get(conn.execute(count_query, list(params.values())).fetchone())
+            
+            # Get paginated data with activity status
+            if search:
+                # When searching, use both search parameters
+                data_query = f"""
+                    SELECT r.address, r.moniker, r.commission_rate, r.jailed, r.jailed_until,
+                           r.last_updated, r.min_tokens_required, r.power, r.fetched_at,
+                           CASE 
+                               WHEN ld.address IS NOT NULL THEN true 
+                               ELSE false 
+                           END as active_24h
+                    FROM reporters r
+                    LEFT JOIN (
+                        SELECT DISTINCT REPORTER as address
+                        FROM layer_data 
+                        WHERE CURRENT_TIME > (
+                            SELECT MAX(CURRENT_TIME) - 86400000 FROM layer_data
+                        )
+                    ) ld ON r.address = ld.address
+                    WHERE {where_clause}
+                    ORDER BY {sort_by} {sort_order}
+                    LIMIT ? OFFSET ?
+                """
+                params_list = [params.get('search1'), params.get('search2')]
+                if jailed_only:
+                    params_list.extend([limit, offset])
+                else:
+                    params_list.extend([limit, offset])
+            else:
+                data_query = f"""
+                    SELECT r.address, r.moniker, r.commission_rate, r.jailed, r.jailed_until,
+                           r.last_updated, r.min_tokens_required, r.power, r.fetched_at,
+                           CASE 
+                               WHEN ld.address IS NOT NULL THEN true 
+                               ELSE false 
+                           END as active_24h
+                    FROM reporters r
+                    LEFT JOIN (
+                        SELECT DISTINCT REPORTER as address
+                        FROM layer_data 
+                        WHERE CURRENT_TIME > (
+                            SELECT MAX(CURRENT_TIME) - 86400000 FROM layer_data
+                        )
+                    ) ld ON r.address = ld.address
+                    WHERE {where_clause}
+                    ORDER BY {sort_by} {sort_order}
+                    LIMIT ? OFFSET ?
+                """
+                params_list = [limit, offset] if not jailed_only else [limit, offset]
+            
+            result = conn.execute(data_query, params_list).fetchall()
+            
+            # Convert to list of dicts
+            reporters = []
+            for row in result:
+                reporters.append({
+                    'address': row[0],
+                    'moniker': row[1],
+                    'commission_rate': row[2],
+                    'jailed': bool(row[3]),
+                    'jailed_until': row[4].isoformat() if row[4] else None,
+                    'last_updated': row[5].isoformat() if row[5] else None,
+                    'min_tokens_required': int(row[6]),
+                    'power': int(row[7]),
+                    'fetched_at': row[8].isoformat() if row[8] else None,
+                    'active_24h': bool(row[9])
+                })
+            
+            return {
+                "reporters": reporters,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "sort_by": sort_by
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error getting reporters: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get reporters: {str(e)}")
+
+@dashboard_app.get("/api/reporters/{address}")
+async def get_reporter_detail(address: str):
+    """Get detailed information about a specific reporter"""
+    try:
+        with db_lock:
+            # Get reporter info
+            reporter_result = conn.execute("""
+                SELECT address, moniker, commission_rate, jailed, jailed_until,
+                       last_updated, min_tokens_required, power, fetched_at, updated_at
+                FROM reporters 
+                WHERE address = ?
+            """, [address]).fetchone()
+            
+            if not reporter_result:
+                raise HTTPException(status_code=404, detail="Reporter not found")
+            
+            reporter = {
+                'address': reporter_result[0],
+                'moniker': reporter_result[1],
+                'commission_rate': reporter_result[2],
+                'jailed': bool(reporter_result[3]),
+                'jailed_until': reporter_result[4].isoformat() if reporter_result[4] else None,
+                'last_updated': reporter_result[5].isoformat() if reporter_result[5] else None,
+                'min_tokens_required': int(reporter_result[6]),
+                'power': int(reporter_result[7]),
+                'fetched_at': reporter_result[8].isoformat() if reporter_result[8] else None,
+                'updated_at': reporter_result[9].isoformat() if reporter_result[9] else None
+            }
+            
+            # Get reporter's transaction stats
+            stats_result = conn.execute("""
+                SELECT 
+                    COUNT(*) as total_transactions,
+                    COUNT(DISTINCT QUERY_ID) as unique_queries,
+                    AVG(VALUE) as avg_value,
+                    MIN(TIMESTAMP) as first_transaction,
+                    MAX(TIMESTAMP) as last_transaction
+                FROM layer_data 
+                WHERE REPORTER = ?
+            """, [address]).fetchone()
+            
+            stats = {
+                'total_transactions': safe_get(stats_result, 0, 0),
+                'unique_queries': safe_get(stats_result, 1, 0),
+                'avg_value': safe_get(stats_result, 2, 0.0),
+                'first_transaction': pd.to_datetime(safe_get(stats_result, 3), unit='ms').isoformat() if safe_get(stats_result, 3) else None,
+                'last_transaction': pd.to_datetime(safe_get(stats_result, 4), unit='ms').isoformat() if safe_get(stats_result, 4) else None
+            }
+            
+            return {
+                "reporter": reporter,
+                "stats": stats
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error getting reporter detail: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get reporter detail: {str(e)}")
+
+@dashboard_app.get("/api/reporters-activity-analytics")
+async def get_reporters_activity_analytics(
+    request: Request,
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+):
+    """Get total reports by active reporters analytics data for different timeframes"""
+    try:
+        # Add cache headers for performance
+        # Cache for 60 seconds for this analytics data
+        cache_seconds = 60
+        optimization_note = ""
+        
+        # Add memory monitoring for performance tracking
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+        logger.info(f"📊 Reporter activity analytics request: timeframe={timeframe}")
+        current_time_ms = int(time.time() * 1000)
+        
+        # Use thread-safe database access
+        with db_lock:
+            if timeframe == "24h":
+                logger.info("🕒 Processing 24h reporter activity analytics...")
+                # 30-minute intervals over past 24 hours
+                hours_24_ms = 24 * 60 * 60 * 1000
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
+                start_time = current_time_ms - hours_24_ms
+                
+            elif timeframe == "7d":
+                logger.info("📅 Processing 7d reporter activity analytics...")
+                # 6-hour intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
+                num_buckets = 28
+                start_time = current_time_ms - days_7_ms
+                
+            elif timeframe == "30d":
+                logger.info("📊 Processing 30d reporter activity analytics...")
+                # Daily intervals over past 30 days
+                days_30_ms = 30 * 24 * 60 * 60 * 1000
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
+                start_time = current_time_ms - days_30_ms
+            
+            logger.info(f"📈 Querying reporter activity data from {start_time} to {current_time_ms}")
+            
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Get bucketed data for total reports by active reporters with power-weighted metrics
+            results = conn.execute(f"""
+                WITH RECURSIVE bucket_series AS (
+                    SELECT 0 as bucket_id
+                    UNION ALL
+                    SELECT bucket_id + 1 FROM bucket_series WHERE bucket_id < ? - 1
+                ),
+                time_buckets AS (
+                    SELECT 
+                        FLOOR((TIMESTAMP - ?) / ?) as bucket_id,
+                        COUNT(DISTINCT REPORTER) as active_reporters,
+                        COUNT(*) as total_reports,
+                        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY COALESCE(POWER_OF_AGGR, 0)) as representative_power_of_aggr
+                    FROM layer_data 
+                    WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
+                    GROUP BY bucket_id
+                )
+                SELECT 
+                    bs.bucket_id,
+                    COALESCE(tb.active_reporters, 0) as active_reporters,
+                    COALESCE(tb.total_reports, 0) as total_reports,
+                    COALESCE(tb.representative_power_of_aggr, 0) as representative_power_of_aggr
+                FROM bucket_series bs
+                LEFT JOIN time_buckets tb ON bs.bucket_id = tb.bucket_id
+                ORDER BY bs.bucket_id
+            """, [num_buckets, start_time, interval_ms, start_time, current_time_ms] + safe_params).fetchall()
+            
+            # Get maximal power data for the same timeframe from CSV
+            maximal_power_data = []
+            try:
+                if reporter_fetcher and reporter_fetcher.maximal_power_tracker:
+                    # Load maximal power data from CSV file
+                    csv_data = reporter_fetcher.maximal_power_tracker.get_all_maximal_power_data()
+                    
+                    # Filter data to our timeframe and convert to timestamp milliseconds
+                    filtered_data = []
+                    for row in csv_data:
+                        timestamp_ms = int(row['timestamp'].timestamp() * 1000)
+                        if start_time <= timestamp_ms <= current_time_ms:
+                            filtered_data.append({
+                                'timestamp_ms': timestamp_ms,
+                                'maximal_power': row['maximal_power']
+                            })
+                    
+                    # Create a lookup map for maximal power by bucket
+                    maximal_power_map = {}
+                    for row in filtered_data:
+                        timestamp_ms = row['timestamp_ms']
+                        power = row['maximal_power'] or 0
+                        bucket_id = int((timestamp_ms - start_time) / interval_ms)
+                        if 0 <= bucket_id < num_buckets:
+                            maximal_power_map[bucket_id] = power
+                    
+                    # Create maximal power array with interpolation for missing values
+                    last_known_power = 0
+                    for i in range(num_buckets):
+                        if i in maximal_power_map:
+                            last_known_power = maximal_power_map[i]
+                            maximal_power_data.append(last_known_power)
+                        else:
+                            # Use last known value for missing data points
+                            maximal_power_data.append(last_known_power)
+                    
+                    logger.info(f"🔋 Found {len(filtered_data)} maximal power snapshots from CSV for {timeframe}")
+                else:
+                    logger.warning("⚠️  Maximal power tracker not available")
+                    maximal_power_data = [0] * num_buckets
+                
+            except Exception as e:
+                logger.warning(f"⚠️  Could not fetch maximal power data from CSV: {e}")
+                # Fill with zeros if maximal power data is not available
+                maximal_power_data = [0] * num_buckets
+            
+            # Create arrays efficiently using list comprehension
+            total_reports_data = [row[2] for row in results]
+            active_reporters_data = [row[1] for row in results]
+            representative_power_of_aggr_data = [row[3] for row in results]
+            
+            # Generate time labels efficiently
+            time_labels = []
+            for i in range(num_buckets):
+                bucket_start = start_time + (i * interval_ms)
+                dt = pd.to_datetime(bucket_start, unit='ms')
+                if timeframe == "24h":
+                    time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d'))
+                elif timeframe == "30d":
+                    time_labels.append(dt.strftime('%m/%d'))
+            
+            # Log final memory usage
+            final_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.info(f"📊 Memory usage: {initial_memory:.1f} MB → {final_memory:.1f} MB (Δ{final_memory-initial_memory:+.1f} MB)")
+            
+            response_data = {
+                "timeframe": timeframe,
+                "title": f"Reporter Activity (Past {timeframe})",
+                "time_labels": time_labels,
+                "total_reports": total_reports_data,
+                "active_reporters": active_reporters_data,
+                "representative_power_of_aggr": representative_power_of_aggr_data,
+                "maximal_power_network": maximal_power_data,
+                "has_maximal_power_data": any(power > 0 for power in maximal_power_data)
+            }
+            
+            # Return with cache headers
+            response = JSONResponse(content=response_data)
+            response.headers["Cache-Control"] = f"public, max-age={cache_seconds}"
+            response.headers["X-Optimization"] = "Efficient SQL with bucket series"
+            
+            return response
+            
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"❌ Reporter activity analytics error: {str(e)}")
+        logger.error(f"📋 Full traceback:\n{error_details}")
+        
+        raise HTTPException(status_code=500, detail=f"Reporter activity analytics processing failed: {str(e)}")
+
+@dashboard_app.get("/api/reporters-summary")
+async def get_reporters_summary():
+    # Get summary statistics about reporters
+    try:
+        with db_lock:
+            # Get basic stats with proper active_24h calculation
+            summary_result = conn.execute("""
+                SELECT 
+                    COUNT(*) as total_reporters,
+                    COUNT(CASE WHEN jailed = true THEN 1 END) as jailed_reporters,
+                    COUNT(CASE WHEN ld.address IS NOT NULL THEN 1 END) as active_reporters,
+                    AVG(power) as avg_power,
+                    MAX(power) as max_power,
+                    SUM(power) as total_power
+                FROM reporters r
+                LEFT JOIN (
+                    SELECT DISTINCT REPORTER as address
+                    FROM layer_data 
+                    WHERE CURRENT_TIME > (
+                        SELECT MAX(CURRENT_TIME) - 86400000 FROM layer_data
+                    )
+                ) ld ON r.address = ld.address
+            """).fetchone()
+            
+            # Get top reporters by power
+            top_reporters = conn.execute("""
+                SELECT moniker, address, power
+                FROM reporters 
+                WHERE power > 0
+                ORDER BY power DESC 
+                LIMIT 10
+            """).fetchall()
+            
+            # Get commission rate distribution
+            commission_dist = conn.execute("""
+                SELECT 
+                    commission_rate,
+                    COUNT(*) as count
+                FROM reporters
+                GROUP BY commission_rate
+                ORDER BY count DESC
+                LIMIT 10
+            """).fetchall()
+            
+            return {
+                "summary": {
+                    "total_reporters": safe_get(summary_result, 0, 0),
+                    "jailed_reporters": safe_get(summary_result, 1, 0),
+                    "active_reporters": safe_get(summary_result, 2, 0),
+                    "avg_power": safe_get(summary_result, 3, 0.0),
+                    "max_power": safe_get(summary_result, 4, 0),
+                    "total_power": safe_get(summary_result, 5, 0)
+                },
+                "top_reporters": [
+                    {
+                        "moniker": row[0],
+                        "address": row[1],
+                        "power": safe_get(row, 2, 0)
+                    }
+                    for row in top_reporters
+                ],
+                "commission_distribution": [
+                    {
+                        "commission_rate": row[0],
+                        "count": safe_get(row, 1, 0)
+                    }
+                    for row in commission_dist
+                ]
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error getting reporters summary: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get reporters summary: {str(e)}")
+
+@dashboard_app.get("/api/reporter-fetcher-status")
+async def get_reporter_fetcher_status():
+    # Get status of the reporter fetcher service
+    try:
+        global reporter_fetcher
+        
+        if not REPORTER_FETCHER_AVAILABLE:
+            return {
+                "available": False,
+                "reason": "Reporter fetcher module not available"
+            }
+        
+        if not reporter_fetcher:
+            return {
+                "available": False,
+                "reason": "Reporter fetcher not initialized"
+            }
+        
+        return {
+            "available": True,
+            "running": reporter_fetcher.is_running,
+            "last_fetch_time": reporter_fetcher.last_fetch_time.isoformat() if reporter_fetcher.last_fetch_time else None,
+            "update_interval": reporter_fetcher.update_interval,
+            "binary_path": str(reporter_fetcher.binary_path)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting reporter fetcher status: {e}")
+        return {
+            "available": False,
+            "reason": f"Error: {str(e)}"
+        }
+
+# Duplicate force_refresh function removed - using the one defined earlier
+
+@dashboard_app.post("/api/trigger-historical-maximal-power")
+async def trigger_historical_maximal_power():
+    """Manually trigger historical maximal power data collection"""
+    try:
+        global reporter_fetcher
+        if not REPORTER_FETCHER_AVAILABLE or not reporter_fetcher:
+            raise HTTPException(status_code=503, detail="Reporter fetcher service not available")
+        
+        if not reporter_fetcher.maximal_power_tracker:
+            raise HTTPException(status_code=503, detail="Maximal power tracker not initialized")
+        
+        logger.info("🔋 Manual historical maximal power collection triggered via API")
+        
+        # Run the historical collection in background
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def collect_historical():
+            try:
+                if not reporter_fetcher or not reporter_fetcher.maximal_power_tracker:
+                    raise Exception("Maximal power tracker not available")
+                
+                tracker = reporter_fetcher.maximal_power_tracker
+                
+                # Get current block info
+                height, timestamp = tracker.get_current_height_and_timestamp()
+                logger.info(f"📊 Collecting historical data from height {height}")
+                
+                # Use the initialize_csv_file method for historical data collection
+                # This will backfill missing heights ending in 0000
+                tracker.initialize_csv_file(days_back=15)  # Collect more historical data
+                
+                # Get the collected data to return count
+                all_data = tracker.get_all_maximal_power_data()
+                historical_count = len([d for d in all_data if d.get('sample_type') == 'historical'])
+                
+                logger.info(f"✅ Historical collection complete: {historical_count} data points")
+                return historical_count
+                
+            except Exception as e:
+                logger.error(f"❌ Historical collection failed: {e}")
+                raise
+        
+        # Execute collection
+        executor = ThreadPoolExecutor(max_workers=1)
+        loop = asyncio.get_event_loop()
+        
+        try:
+            # Wait up to 60 seconds for collection
+            data_points = await asyncio.wait_for(
+                loop.run_in_executor(executor, collect_historical), 
+                timeout=60.0
+            )
+            
+            return JSONResponse(content={
+                "status": "success", 
+                "message": f"Historical maximal power collection completed",
+                "data_points_collected": data_points
+            })
+            
+        except asyncio.TimeoutError:
+            return JSONResponse(content={
+                "status": "timeout",
+                "message": "Collection started but may still be running in background"
+            })
+        
+    except Exception as e:
+        logger.error(f"❌ Manual historical collection failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Historical collection failed: {str(e)}")
+
 # Mount static files for dashboard
 dashboard_app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 
 # Mount dashboard sub-application
-app.mount("/dashboard", dashboard_app)
+app.mount("/dashboard-mainnet", dashboard_app)
 
 # Add after existing middleware
 @app.middleware("http")

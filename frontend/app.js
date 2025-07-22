@@ -4,6 +4,7 @@ let currentFilters = {};
 let isLoading = false;
 let totalRecords = 0;
 let pageLoadTime = new Date(); // Store page load time
+let isQuestionableFilterActive = false; // Track questionable filter state
 
 // Enhanced cellular detection
 const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -33,7 +34,7 @@ const MAX_RETRIES = IS_CELLULAR ? 1 : (IS_MOBILE ? 2 : 3);
 
 // Configuration with mobile detection
 const RECORDS_PER_PAGE = 100;
-const API_BASE = '/dashboard';
+const API_BASE = '/dashboard-mainnet';
 
 // DOM elements
 const elements = {
@@ -55,14 +56,9 @@ const elements = {
     questionableSubtitle: document.getElementById('questionable-subtitle'),
     urgentIndicator: document.getElementById('urgent-indicator'),
     
-    // Search and filters
-    searchInput: document.getElementById('search-input'),
-    searchBtn: document.getElementById('search-btn'),
-    filterReporter: document.getElementById('filter-reporter'),
-    filterQueryType: document.getElementById('filter-query-type'),
-    filterQueryId: document.getElementById('filter-query-id'),
-    applyFilters: document.getElementById('apply-filters'),
-    clearFilters: document.getElementById('clear-filters'),
+    // Header search
+    headerSearchInput: document.getElementById('header-search-input'),
+    headerSearchBtn: document.getElementById('header-search-btn'),
     
     // Data table
     dataTable: document.getElementById('data-table'),
@@ -120,6 +116,9 @@ const elements = {
     // Agreement card
     averageAgreement: document.getElementById('average-agreement'),
     agreementCard: document.getElementById('agreement-card'),
+    
+    // Total potential power card
+    totalPotentialPower: document.getElementById('total-potential-power'),
     
     // Agreement analytics modal
     agreementAnalyticsModal: document.getElementById('agreement-analytics-modal'),
@@ -216,7 +215,7 @@ const updateLoadTime = () => {
 };
 
 // Enhanced API call with cellular optimizations
-const apiCall = async (endpoint, params = {}, retries = MAX_RETRIES) => {
+const apiCall = async (endpoint, params = {}, retries = MAX_RETRIES, forceRefresh = false) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     
@@ -228,12 +227,25 @@ const apiCall = async (endpoint, params = {}, retries = MAX_RETRIES) => {
             }
         });
         
-        console.log(`📡 ${IS_CELLULAR ? 'CELLULAR' : (IS_MOBILE ? 'MOBILE' : 'DESKTOP')} API Call: ${endpoint}`);
+        // Add cache-busting timestamp for forced refreshes
+        if (forceRefresh) {
+            url.searchParams.append('_t', Date.now().toString());
+        }
+        
+        console.log(`📡 ${IS_CELLULAR ? 'CELLULAR' : (IS_MOBILE ? 'MOBILE' : 'DESKTOP')} API Call: ${endpoint}${forceRefresh ? ' (FORCE REFRESH)' : ''}`);
         
         const headers = {
-            'X-Mobile-Request': IS_MOBILE ? 'true' : 'false',
-            'Cache-Control': IS_CELLULAR ? 'max-age=60' : (IS_MOBILE ? 'max-age=120' : 'max-age=300')
+            'X-Mobile-Request': IS_MOBILE ? 'true' : 'false'
         };
+        
+        // Set cache control headers based on refresh mode
+        if (forceRefresh) {
+            headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+            headers['Pragma'] = 'no-cache';
+            headers['Expires'] = '0';
+        } else {
+            headers['Cache-Control'] = IS_CELLULAR ? 'max-age=60' : (IS_MOBILE ? 'max-age=120' : 'max-age=300');
+        }
         
         // Add cellular connection indicator
         if (IS_CELLULAR) {
@@ -270,7 +282,7 @@ const apiCall = async (endpoint, params = {}, retries = MAX_RETRIES) => {
             const retryDelay = IS_CELLULAR ? 2000 : 1000;
             console.log(`🔄 Retrying API call: ${endpoint} (${retries} retries left)`);
             await new Promise(resolve => setTimeout(resolve, retryDelay));
-            return apiCall(endpoint, params, retries - 1);
+            return apiCall(endpoint, params, retries - 1, forceRefresh);
         }
         
         if (IS_CELLULAR) {
@@ -307,11 +319,12 @@ const showCellularErrorMessage = (error) => {
     }, 8000);
 };
 
-const loadStats = async () => {
+const loadStats = async (forceRefresh = false) => {
     try {
-        const [info, stats] = await Promise.all([
-            apiCall('/info'),
-            apiCall('/stats')
+        const [info, stats, reportersSummary] = await Promise.all([
+            apiCall('/info', {}, MAX_RETRIES, forceRefresh),
+            apiCall('/stats', {}, MAX_RETRIES, forceRefresh),
+            apiCall('/reporters-summary', {}, MAX_RETRIES, forceRefresh)
         ]);
         
         // Update header stats
@@ -320,7 +333,24 @@ const loadStats = async () => {
         // Update stats cards
         elements.uniqueReporters.textContent = formatNumber(stats.unique_reporters);
         elements.uniqueQueryIds30d.textContent = formatNumber(stats.unique_query_ids_30d);
-        elements.totalReporterPower.textContent = stats.total_reporter_power ? formatValue(stats.total_reporter_power) : '-';
+        
+        // Calculate reporting power utilization percentage
+        if (stats.active_reporter_power && reportersSummary.summary && reportersSummary.summary.total_power) {
+            const reportingPower = stats.active_reporter_power;
+            const totalRegistryPower = reportersSummary.summary.total_power;
+            const utilizationPercent = (reportingPower / totalRegistryPower * 100).toFixed(1);
+            elements.totalReporterPower.textContent = `${utilizationPercent}%`;
+        } else {
+            elements.totalReporterPower.textContent = '-';
+        }
+        
+        // Update total potential power from reporters registry
+        if (reportersSummary.summary && reportersSummary.summary.total_power) {
+            elements.totalPotentialPower.textContent = formatNumber(reportersSummary.summary.total_power);
+        } else {
+            elements.totalPotentialPower.textContent = '-';
+        }
+        
         elements.recentActivity.textContent = formatNumber(stats.recent_activity);
         
         // Update questionable values
@@ -350,6 +380,9 @@ const loadStats = async () => {
         }
         
         // Populate filter dropdowns
+        // Note: Commenting out filter dropdowns that don't exist in the HTML
+        // to prevent JavaScript errors that stop loadStats from completing
+        /*
         if (stats.query_types) {
             elements.filterQueryType.innerHTML = '<option value="">All Types</option>';
             stats.query_types.forEach(type => {
@@ -374,10 +407,11 @@ const loadStats = async () => {
                 elements.filterReporter.appendChild(option);
             });
         }
+        */
         
-        // Populate query ID dropdown
-        if (stats.top_query_ids) {
-            elements.filterQueryId.innerHTML = '<option value="">All Query IDs</option>';
+        // Populate query ID dropdown (only for power analytics modal)
+        if (stats.top_query_ids && elements.queryIdSelect) {
+            elements.queryIdSelect.innerHTML = '<option value="">Overall (All Query IDs)</option>';
             stats.top_query_ids.forEach(queryId => {
                 const option = document.createElement('option');
                 option.value = queryId.QUERY_ID;
@@ -386,7 +420,7 @@ const loadStats = async () => {
                     : queryId.QUERY_ID;
                 option.textContent = `${shortQueryId} (${queryId.count})`;
                 option.title = queryId.QUERY_ID; // Full query ID on hover
-                elements.filterQueryId.appendChild(option);
+                elements.queryIdSelect.appendChild(option);
             });
         }
         
@@ -405,7 +439,7 @@ const loadStats = async () => {
 };
 
 // Enhanced loading with mobile optimization
-const loadData = async (page = 1, filters = {}) => {
+const loadData = async (page = 1, filters = {}, forceRefresh = false) => {
     showLoading();
     
     try {
@@ -418,9 +452,9 @@ const loadData = async (page = 1, filters = {}) => {
             ...filters
         };
         
-        console.log(`📊 Loading data - Page: ${page}, Mobile: ${IS_MOBILE}, PageSize: ${pageSize}`);
+        console.log(`📊 Loading data - Page: ${page}, Mobile: ${IS_MOBILE}, PageSize: ${pageSize}${forceRefresh ? ' (FORCE REFRESH)' : ''}`);
         
-        const response = await apiCall('/data', params);
+        const response = await apiCall('/data', params, MAX_RETRIES, forceRefresh);
         
         // Update table
         renderTable(response.data);
@@ -483,16 +517,16 @@ const updatePagination = (page, totalPages, total, offset, additionalInfo = '') 
     elements.nextPage.disabled = page >= totalPages;
 };
 
-const searchData = async (query) => {
+const searchData = async (query, forceRefresh = false) => {
     if (!query.trim()) {
-        await loadData(1, currentFilters);
+        await loadData(1, currentFilters, forceRefresh);
         return;
     }
     
     showLoading();
     
     try {
-        const response = await apiCall('/search', { q: query.trim() });
+        const response = await apiCall('/search', { q: query.trim() }, MAX_RETRIES, forceRefresh);
         
         // Update table with search results
         renderTable(response.results);
@@ -518,8 +552,13 @@ const formatAgreement = (reportedValue, trustedValue) => {
         return '-';
     }
     
+    // Handle perfect agreement
+    if (reportedValue === trustedValue) {
+        return '100.00%';
+    }
+    
     const percentDiff = Math.abs((reportedValue - trustedValue) / trustedValue);
-    const agreement = (1 - percentDiff) * 100;
+    const agreement = Math.max(0, (1 - percentDiff) * 100);
     
     // Format with 2 decimal places and add % sign
     return `${agreement.toFixed(2)}%`;
@@ -531,8 +570,13 @@ const getAgreementClass = (reportedValue, trustedValue) => {
         return 'agreement-na';
     }
     
+    // Handle perfect agreement
+    if (reportedValue === trustedValue) {
+        return 'agreement-perfect';
+    }
+    
     const percentDiff = Math.abs((reportedValue - trustedValue) / trustedValue);
-    const agreement = (1 - percentDiff) * 100;
+    const agreement = Math.max(0, (1 - percentDiff) * 100);
     
     if (agreement >= 99) return 'agreement-perfect';     // ≥99% agreement
     if (agreement >= 95) return 'agreement-good';       // ≥95% agreement  
@@ -635,17 +679,39 @@ const showDetails = (row) => {
 };
 
 const showQuestionableValues = async () => {
-    // Clear search input and existing filters
-    elements.searchInput.value = '';
-    elements.filterReporter.value = '';
-    elements.filterQueryType.value = '';
-    elements.filterQueryId.value = '';
+    // Clear header search input
+    elements.headerSearchInput.value = '';
     
-    // Set up questionable filter
-    currentFilters = { questionable_only: true };
-    currentPage = 1;
+    // Toggle questionable filter
+    if (isQuestionableFilterActive) {
+        // Remove filter - show all data
+        currentFilters = {};
+        currentPage = 1;
+        isQuestionableFilterActive = false;
+        
+        // Remove active styling
+        elements.questionableCard.classList.remove('filter-active');
+        
+        // Update subtitle to default
+        if (elements.questionableSubtitle.textContent.includes('Click to view')) {
+            // Keep the existing subtitle if it's the default
+        } else {
+            elements.questionableSubtitle.textContent = 'Click to view';
+        }
+    } else {
+        // Apply filter - show only questionable values
+        currentFilters = { questionable_only: true };
+        currentPage = 1;
+        isQuestionableFilterActive = true;
+        
+        // Add active styling
+        elements.questionableCard.classList.add('filter-active');
+        
+        // Update subtitle to indicate filter is active
+        elements.questionableSubtitle.textContent = 'Click to remove filter';
+    }
     
-    // Load data with questionable filter
+    // Load data with current filters
     await loadData(currentPage, currentFilters);
 };
 
@@ -680,8 +746,8 @@ const loadAnalytics = async (timeframe) => {
         
         console.log(`📊 Loading analytics - Timeframe: ${timeframe}, Mobile: ${IS_MOBILE}`);
         
-        // Fetch analytics data with mobile optimization
-        const data = await apiCall('/analytics', { timeframe });
+        // Fetch analytics data with mobile optimization - using reporters-activity-analytics for maximal power data
+        const data = await apiCall('/reporters-activity-analytics', { timeframe });
         
         // Update title
         elements.analyticsTitle.textContent = data.title;
@@ -710,61 +776,198 @@ const createAnalyticsChart = (data) => {
         analyticsChart.destroy();
     }
     
-    // Prepare data for Chart.js
-    const labels = data.data.map(item => item.time_label);
-    const counts = data.data.map(item => item.count);
-    
     // Create gradient
     const gradient = ctx.createLinearGradient(0, 0, 0, 400);
     gradient.addColorStop(0, 'rgba(0, 255, 136, 0.3)');
     gradient.addColorStop(1, 'rgba(0, 255, 136, 0.05)');
     
+    // Prepare datasets - start with total reports
+    const datasets = [{
+        label: 'Total Reports',
+        data: data.total_reports || [],
+        borderColor: '#00ff88',
+        backgroundColor: gradient,
+        borderWidth: 2,
+        fill: true,
+        tension: 0,
+        pointBackgroundColor: '#00ff88',
+        pointBorderColor: '#000',
+        pointBorderWidth: 2,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        yAxisID: 'y'
+    }];
+    
+    // Add active reporters dataset
+    if (data.active_reporters) {
+        datasets.push({
+            label: 'Active Reporters',
+            data: data.active_reporters,
+            borderColor: '#00d4ff',
+            backgroundColor: 'rgba(0, 212, 255, 0.1)',
+            borderWidth: 2,
+            fill: false,
+            tension: 0,
+            pointBackgroundColor: '#00d4ff',
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            yAxisID: 'y'
+        });
+    }
+    
+    // Add representative power dataset if available
+    if (data.representative_power_of_aggr) {
+        datasets.push({
+            label: 'Median Power Per Report',
+            data: data.representative_power_of_aggr,
+            borderColor: '#a855f7',
+            backgroundColor: 'rgba(168, 85, 247, 0.1)',
+            borderWidth: 2,
+            fill: false,
+            tension: 0,
+            pointBackgroundColor: '#a855f7',
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            yAxisID: 'y1'
+        });
+    }
+    
+    // Add maximal power dataset if data is available
+    if (data.has_maximal_power_data && data.maximal_power_network) {
+        datasets.push({
+            label: 'Maximal Network Power',
+            data: data.maximal_power_network,
+            borderColor: '#ff8c00',
+            backgroundColor: 'rgba(255, 140, 0, 0.1)',
+            borderWidth: 3,
+            borderDash: [5, 5],  // Dashed line to distinguish from median power
+            fill: false,
+            tension: 0,
+            pointBackgroundColor: '#ff8c00',
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            yAxisID: 'y1'
+        });
+    }
+    
     analyticsChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: labels,
-            datasets: [{
-                label: 'Reports',
-                data: counts,
-                borderColor: '#00ff88',
-                backgroundColor: gradient,
-                borderWidth: 2,
-                fill: true,
-                tension: 0.4,
-                pointBackgroundColor: '#00ff88',
-                pointBorderColor: '#000',
-                pointBorderWidth: 2,
-                pointRadius: 4,
-                pointHoverRadius: 6
-            }]
+            labels: data.time_labels || [],
+            datasets: datasets
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
                 legend: {
-                    display: false
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        color: '#00d4ff',
+                        usePointStyle: true,
+                        padding: 15,
+                        font: {
+                            family: 'Inter',
+                            size: 12
+                        }
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    backgroundColor: 'rgba(26, 26, 46, 0.9)',
+                    titleColor: '#00d4ff',
+                    bodyColor: '#00ff88',
+                    borderColor: '#333344',
+                    borderWidth: 1,
+                    callbacks: {
+                        title: function(context) {
+                            return `Time: ${context[0].label}`;
+                        },
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            let value = context.formattedValue;
+                            
+                            // Format power values differently
+                            if (dataset.label.includes('Power')) {
+                                value = parseFloat(context.raw).toLocaleString();
+                            }
+                            
+                            return `${dataset.label}: ${value}`;
+                        }
+                    }
                 }
             },
             scales: {
                 x: {
                     ticks: {
                         color: '#00d4ff',
-                        maxTicksLimit: data.timeframe === 'weekly' ? 8 : 12,
+                        maxTicksLimit: 12,
+                        font: {
+                            family: 'Inter',
+                            size: 11
+                        }
                     },
                     grid: {
                         color: 'rgba(51, 51, 68, 0.5)'
                     }
                 },
                 y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
                     ticks: {
-                        color: '#00d4ff',
-                        beginAtZero: true
+                        color: '#00ff88',
+                        beginAtZero: true,
+                        font: {
+                            family: 'Inter',
+                            size: 11
+                        }
                     },
                     grid: {
                         color: 'rgba(51, 51, 68, 0.5)'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Reports & Active Reporters',
+                        color: '#00ff88'
+                    }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    ticks: {
+                        color: '#a855f7',
+                        font: {
+                            family: 'Inter',
+                            size: 11
+                        },
+                        callback: function(value) {
+                            return value.toLocaleString();  // Format large numbers with commas
+                        }
+                    },
+                    grid: {
+                        drawOnChartArea: false,
+                    },
+                    title: {
+                        display: true,
+                        text: 'Power Values',
+                        color: '#a855f7'
                     }
                 }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
             },
             elements: {
                 point: {
@@ -871,12 +1074,12 @@ const createQueryAnalyticsChart = (data) => {
             backgroundColor: `${colors[index]}20`,
             borderWidth: 2,
             fill: false,
-            tension: 0.4,
+            tension: 0,
             pointBackgroundColor: colors[index],
             pointBorderColor: '#000',
             pointBorderWidth: 1,
-            pointRadius: 3,
-            pointHoverRadius: 5,
+            pointRadius: 4,
+            pointHoverRadius: 6,
             hidden: isHidden,
             queryId: queryInfo.id,
             totalCount: queryInfo.total_count
@@ -1078,12 +1281,12 @@ const createReporterAnalyticsChart = (data) => {
             backgroundColor: `${colors[index]}20`,
             borderWidth: 2,
             fill: false,
-            tension: 0.4,
+            tension: 0,
             pointBackgroundColor: colors[index],
             pointBorderColor: '#000',
             pointBorderWidth: 1,
-            pointRadius: 3,
-            pointHoverRadius: 5,
+            pointRadius: 4,
+            pointHoverRadius: 6,
             hidden: isHidden,
             reporterAddress: reporterInfo.address,
             totalCount: reporterInfo.total_count
@@ -1338,7 +1541,7 @@ const showPowerInfo = (data) => {
     // Show total power
     infoHTML += `
         <div class="info-item">
-            <span class="info-label">Total Power:</span>
+            <span class="info-label">Total Power This Aggregate:</span>
             <span class="info-value highlight">${formatNumber(data.total_power)}</span>
         </div>
     `;
@@ -1590,12 +1793,12 @@ const createAgreementAnalyticsChart = (data) => {
             backgroundColor: `${colors[index]}20`,
             borderWidth: 2,
             fill: false,
-            tension: 0.4,
+            tension: 0,
             pointBackgroundColor: colors[index],
             pointBorderColor: '#000',
             pointBorderWidth: 1,
-            pointRadius: 3,
-            pointHoverRadius: 5,
+            pointRadius: 4,
+            pointHoverRadius: 6,
             hidden: isHidden,
             queryId: queryInfo.id,
             totalCount: queryInfo.total_count
@@ -1747,46 +1950,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Questionable values card click
     elements.questionableCard.addEventListener('click', showQuestionableValues);
     
-    // Search functionality
-    elements.searchBtn.addEventListener('click', () => {
-        const query = elements.searchInput.value;
-        searchData(query);
-    });
-    
-    elements.searchInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            const query = elements.searchInput.value;
-            searchData(query);
+    // Header search functionality - redirect to search page
+    elements.headerSearchBtn.addEventListener('click', () => {
+        const query = elements.headerSearchInput.value.trim();
+        if (query) {
+            window.location.href = `/dashboard-mainnet/search?q=${encodeURIComponent(query)}`;
         }
     });
     
-    // Filter functionality
-    elements.applyFilters.addEventListener('click', () => {
-        currentFilters = {
-            reporter: elements.filterReporter.value,
-            query_type: elements.filterQueryType.value,
-            query_id: elements.filterQueryId.value
-        };
-        
-        // Remove empty filters
-        Object.keys(currentFilters).forEach(key => {
-            if (!currentFilters[key]) {
-                delete currentFilters[key];
+    elements.headerSearchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            const query = elements.headerSearchInput.value.trim();
+            if (query) {
+                window.location.href = `/dashboard-mainnet/search?q=${encodeURIComponent(query)}`;
             }
-        });
-        
-        currentPage = 1;
-        loadData(currentPage, currentFilters);
-    });
-    
-    elements.clearFilters.addEventListener('click', () => {
-        elements.filterReporter.value = '';
-        elements.filterQueryType.value = '';
-        elements.filterQueryId.value = '';
-        
-        currentFilters = {};
-        currentPage = 1;
-        loadData(currentPage, currentFilters);
+        }
     });
     
     // Pagination
@@ -1806,9 +1984,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         pageLoadTime = new Date();
         updateLoadTime();
         
-        // Refresh data and stats
-        loadStats();
-        loadData(currentPage, currentFilters);
+        // Refresh data and stats with cache busting
+        loadStats(true);  // Force refresh for stats
+        loadData(currentPage, currentFilters, true);  // Force refresh for data
     });
     
     // Modal functionality
@@ -1921,15 +2099,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             switch (e.key) {
                 case 'k':
                     e.preventDefault();
-                    elements.searchInput.focus();
+                    elements.headerSearchInput.focus();
                     break;
                 case 'r':
                     e.preventDefault();
                     // Update load time when refreshing via keyboard
                     pageLoadTime = new Date();
                     updateLoadTime();
-                    loadStats();
-                    loadData(currentPage, currentFilters);
+                    loadStats(true);  // Force refresh for stats
+                    loadData(currentPage, currentFilters, true);  // Force refresh for data
                     break;
             }
         }

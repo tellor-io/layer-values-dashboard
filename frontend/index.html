@@ -13,45 +13,6 @@
     <div class="app">
         <!-- Main Content -->
         <main class="main">
-            <!-- Control Panel -->
-            <div class="control-panel">
-                <div class="search-section">
-                    <div class="search-box">
-                        <i class="fas fa-search"></i>
-                        <input type="text" id="search-input" placeholder="Search reporters, hashes, values...">
-                        <button id="search-btn" class="btn btn-primary">Search</button>
-                    </div>
-                </div>
-
-                <div class="filters-section">
-                    <h3>Filters</h3>
-                    <div class="filter-grid">
-                        <div class="filter-group">
-                            <label>Reporter</label>
-                            <select id="filter-reporter">
-                                <option value="">All Reporters</option>
-                            </select>
-                        </div>
-                        <div class="filter-group">
-                            <label>Query Type</label>
-                            <select id="filter-query-type">
-                                <option value="">All Types</option>
-                            </select>
-                        </div>
-                        <div class="filter-group">
-                            <label>Query ID</label>
-                            <select id="filter-query-id">
-                                <option value="">All Query IDs</option>
-                            </select>
-                        </div>
-                        <div class="filter-details">
-                            <button id="apply-filters" class="btn btn-primary">Apply Filters</button>
-                            <button id="clear-filters" class="btn btn-secondary">Clear</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
             <!-- Stats Dashboard -->
             <div class="stats-dashboard">
                 <div class="stats-grid">
@@ -77,12 +38,12 @@
                     </div>
                     <div class="stat-card clickable" id="total-reporter-power-card">
                         <div class="stat-icon">
-                            <i class="fas fa-chart-line"></i>
+                            <i class="fas fa-percentage"></i>
                         </div>
                         <div class="stat-content">
                             <div class="stat-number" id="total-reporter-power">-</div>
-                            <div class="stat-title">Current Reporter Power</div>
-                            <div class="stat-subtitle">Click to view distribution</div>
+                            <div class="stat-title">Power Utilization</div>
+                            <div class="stat-subtitle">Reporting power vs total registry</div>
                         </div>
                     </div>
                     <div class="stat-card clickable" id="recent-activity-card">
@@ -118,6 +79,16 @@
                             <div class="stat-subtitle">Click to view analytics</div>
                         </div>
                     </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-chart-line"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="total-potential-power">-</div>
+                            <div class="stat-title">Total Potential Power</div>
+                            <div class="stat-subtitle">Sum of TRB Staked for Reporting</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -144,6 +115,15 @@
                         </div>
                     </div>
                     <div class="data-controls">
+                        <div class="header-search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="header-search-input" placeholder="Search anything in the data...">
+                            <button id="header-search-btn" class="btn btn-primary">Search</button>
+                            <span class="experimental-label">(search is currently experimental)</span>
+                        </div>
+                        <a href="/dashboard-mainnet/reporters" class="btn btn-secondary">
+                            <i class="fas fa-users"></i> View Reporters
+                        </a>
                         <button id="refresh-data" class="btn btn-secondary">
                             <i class="fas fa-sync"></i> Refresh
                         </button>
