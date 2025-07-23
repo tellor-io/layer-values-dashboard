@@ -15,7 +15,7 @@ def check_dashboard_health():
     """Check if dashboard is responding and healthy"""
     try:
         # Test main endpoint
-        response = requests.get("http://localhost:8000/dashboard-mainnet/api/info", timeout=10)
+        response = requests.get("http://localhost:8001/dashboard-palmito/api/info", timeout=10)
         if response.status_code == 200:
             data = response.json()
             return True, data.get('total_rows', 0)
@@ -32,7 +32,7 @@ def check_source_files():
     """Check if source CSV files are being updated"""
     try:
         # Look for the most recent table file
-        pattern = "/home/admin/layer-values-monitor/logs/table_*.csv"
+        pattern = "/home/spuddy/monitoring/palmito/layer-values-monitor/logs/table_*.csv"
         files = glob.glob(pattern)
         if not files:
             return False, "No source files found"

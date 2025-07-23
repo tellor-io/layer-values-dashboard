@@ -29,12 +29,12 @@ function checkCellularConnection() {
 }
 
 // Cellular-optimized configuration
-const REQUEST_TIMEOUT = IS_CELLULAR ? 8000 : (IS_MOBILE ? 15000 : 30000);
+const REQUEST_TIMEOUT = IS_CELLULAR ? 8001 : (IS_MOBILE ? 15000 : 30000);
 const MAX_RETRIES = IS_CELLULAR ? 1 : (IS_MOBILE ? 2 : 3);
 
 // Configuration with mobile detection
 const RECORDS_PER_PAGE = 100;
-const API_BASE = '/dashboard-mainnet';
+const API_BASE = '/dashboard-palmito';
 
 // DOM elements
 const elements = {
@@ -316,7 +316,7 @@ const showCellularErrorMessage = (error) => {
         if (errorDiv.parentElement) {
             errorDiv.remove();
         }
-    }, 8000);
+    }, 8001);
 };
 
 const loadStats = async (forceRefresh = false) => {
@@ -1954,7 +1954,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.headerSearchBtn.addEventListener('click', () => {
         const query = elements.headerSearchInput.value.trim();
         if (query) {
-            window.location.href = `/dashboard-mainnet/search?q=${encodeURIComponent(query)}`;
+            window.location.href = `/dashboard-palmito/search?q=${encodeURIComponent(query)}`;
         }
     });
     
@@ -1962,7 +1962,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Enter') {
             const query = elements.headerSearchInput.value.trim();
             if (query) {
-                window.location.href = `/dashboard-mainnet/search?q=${encodeURIComponent(query)}`;
+                window.location.href = `/dashboard-palmito/search?q=${encodeURIComponent(query)}`;
             }
         }
     });

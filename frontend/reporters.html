@@ -123,7 +123,7 @@
                         </div>
                     </div>
                     <div class="data-controls">
-                        <a href="/dashboard-mainnet/" class="btn btn-secondary">
+                        <a href="/dashboard-palmito/" class="btn btn-secondary">
                             <i class="fas fa-arrow-left"></i> Back to Dashboard
                         </a>
                         <button id="refresh-data" class="btn btn-secondary">
@@ -218,7 +218,7 @@
                     mobileLog(`Fetching: ${url}`);
                 }
                 // Shorter timeout for mobile
-                const timeoutMs = IS_MOBILE ? 8000 : 15000;
+                const timeoutMs = IS_MOBILE ? 8001 : 15000;
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
                 
@@ -413,7 +413,7 @@
             
             async loadSummary() {
                 try {
-                    const response = await safeFetch('/dashboard-mainnet/api/reporters-summary');
+                    const response = await safeFetch('/dashboard-palmito/api/reporters-summary');
                     const data = await response.json();
                     
                     // Update stat cards
@@ -449,7 +449,7 @@
                         sort_by: 'power'
                     });
                     
-                    const response = await safeFetch(`/dashboard-mainnet/api/reporters?${params}`);
+                    const response = await safeFetch(`/dashboard-palmito/api/reporters?${params}`);
                     const data = await response.json();
                     
                     this.totalReporters = data.total;
@@ -571,7 +571,7 @@
                     loadingEl.style.display = 'flex';
                     
                     // Fetch analytics data
-                    const response = await safeFetch(`/dashboard-mainnet/api/reporters-activity-analytics?timeframe=${timeframe}`);
+                    const response = await safeFetch(`/dashboard-palmito/api/reporters-activity-analytics?timeframe=${timeframe}`);
                     
                     const data = await response.json();
                     

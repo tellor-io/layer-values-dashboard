@@ -14,19 +14,26 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Layer Values Dashboard')
     parser.add_argument('--source-dir', '-s', 
-                       default=os.getenv('LAYER_SOURCE_DIR', 'source_tables'),
-                       help='Directory containing CSV files (default: source_tables)')
+                       default=os.getenv('LAYER_SOURCE_DIR', None),
+                       help='Directory containing CSV files')
     parser.add_argument('--layer-rpc-url', 
                        default=os.getenv('LAYER_RPC_URL', None),
                        help='RPC URL for layerd commands')
+    parser.add_argument('--instance-name', 
+                       default=os.getenv('LAYER_INSTANCE_NAME', 'palmito'),
+                       help='Instance name for this dashboard (default: palmito)')
     parser.add_argument('--port', '-p', 
-                       default=8000, type=int,
-                       help='Port to run the server on (default: 8000)')
+                       default=8001, type=int,
+                       help='Port to run the server on (default: 8001)')
     parser.add_argument('--host', 
                        default='0.0.0.0',
                        help='Host to bind the server to (default: 0.0.0.0)')
     
     args = parser.parse_args()
+    
+    # Set instance-specific defaults
+    if not args.source_dir:
+        args.source_dir = f'source_tables_{args.instance_name}'
     
     # Get the directory where this script is located
     project_root = Path(__file__).parent.absolute()
@@ -35,7 +42,9 @@ def main():
     print("🚀 Starting Layer Values Dashboard...")
     print(f"📁 Project root: {project_root}")
     print(f"📁 Backend directory: {backend_dir}")
+    print(f"🏷️  Instance name: {args.instance_name}")
     print(f"📊 Source directory: {args.source_dir}")
+    print(f"🌐 Mount path: /dashboard-{args.instance_name}")
     
     # Check if backend directory exists
     if not backend_dir.exists():
@@ -56,15 +65,20 @@ def main():
     
     # Check if source directory exists
     source_dir = Path(args.source_dir)
-    if not source_dir.exists() or not any(source_dir.glob("*.csv")):
+    if not source_dir.exists():
+        print(f"📁 Creating source directory: {args.source_dir}")
+        source_dir.mkdir(parents=True, exist_ok=True)
+    
+    csv_files = list(source_dir.glob("*.csv"))
+    if not csv_files:
         print(f"⚠️  Warning: No CSV files found in {args.source_dir} directory")
         print("The dashboard will start but won't have any data to display.")
     else:
-        csv_files = list(source_dir.glob("*.csv"))
         print(f"📊 Found {len(csv_files)} CSV files in {args.source_dir}/")
     
-    # Set environment variable for the backend
+    # Set environment variables for the backend
     os.environ['LAYER_SOURCE_DIR'] = str(source_dir.absolute())
+    os.environ['LAYER_INSTANCE_NAME'] = args.instance_name
     if args.layer_rpc_url:
         os.environ['LAYER_RPC_URL'] = args.layer_rpc_url
     
@@ -72,18 +86,19 @@ def main():
     os.chdir(backend_dir)
     
     print("\n🌐 Starting web server...")
-    print(f"📱 Dashboard will be available at: http://localhost:{args.port}")
+    print(f"📱 Dashboard will be available at: http://localhost:{args.port}/dashboard-{args.instance_name}/")
     print(f"🔧 API documentation at: http://localhost:{args.port}/docs")
+    print(f"📋 Log file: dashboard_{args.instance_name}.log")
     print("\n💡 Press Ctrl+C to stop the server")
     print("-" * 50)
     
     try:
-        # Start the FastAPI server
+        # Start the FastAPI server with instance-specific parameters
         subprocess.run([
             sys.executable, "-m", "uvicorn", 
             "main:app", 
             "--host", args.host, 
-            "--port", str(args.port), 
+            "--port", str(args.port),
             "--reload"
         ])
     except KeyboardInterrupt:

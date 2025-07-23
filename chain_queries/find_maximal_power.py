@@ -424,6 +424,50 @@ class MaximalPowerTracker:
             logger.error(f"❌ Error initializing historical data: {e}")
             raise
 
+    def get_all_maximal_power_data(self) -> List[Dict]:
+        """
+        Get all maximal power data from the database.
+        Returns data in the format expected by the dashboard.
+        """
+        if not self.db_connection:
+            logger.warning("⚠️  Database connection not available")
+            return []
+            
+        try:
+            result = self.db_connection.execute("""
+                SELECT height, timestamp, maximal_power, sample_type
+                FROM maximal_power_snapshots
+                ORDER BY timestamp ASC
+            """).fetchall()
+            
+            data = []
+            for row in result:
+                data.append({
+                    'height': row[0],
+                    'timestamp': datetime.fromisoformat(row[1]) if isinstance(row[1], str) else row[1],
+                    'maximal_power': row[2],
+                    'sample_type': row[3]
+                })
+            
+            logger.info(f"📊 Retrieved {len(data)} maximal power snapshots")
+            return data
+            
+        except Exception as e:
+            logger.error(f"❌ Error retrieving all maximal power data: {e}")
+            return []
+
+    def initialize_csv_file(self, days_back: int = 7):
+        """
+        Initialize/update the CSV file with historical data.
+        This method is expected by the dashboard API.
+        """
+        try:
+            logger.info(f"🔄 Initializing CSV file with {days_back} days of data...")
+            return self.initialize_historical_data(days_back)
+        except Exception as e:
+            logger.error(f"❌ Error initializing CSV file: {e}")
+            return []
+
 
 def main():
     """

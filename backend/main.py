@@ -19,13 +19,12 @@ import gc
 import logging
 from contextlib import asynccontextmanager
 
-# Configure logging for better error tracking
+# Configure logging for better error tracking - will be reconfigured with instance name later
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('dashboard.log')
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
@@ -70,11 +69,14 @@ def safe_get(row, index=0, default=None):
 def parse_args():
     parser = argparse.ArgumentParser(add_help=False)  # Don't interfere with uvicorn's help
     parser.add_argument('--source-dir', '-s', 
-                       default=os.getenv('LAYER_SOURCE_DIR', 'source_tables'),
-                       help='Directory containing CSV files (default: source_tables)')
+                       default=os.getenv('LAYER_SOURCE_DIR', None),  # Changed: no default here
+                       help='Directory containing CSV files')
     parser.add_argument('--layer-rpc-url', 
                        default=os.getenv('LAYER_RPC_URL', None),
                        help='RPC URL for layerd commands (default: use layerd default)')
+    parser.add_argument('--instance-name', 
+                       default=os.getenv('LAYER_INSTANCE_NAME', 'palmito'),
+                       help='Instance name for this dashboard (default: palmito)')
     
     # Only parse known args to avoid conflicts with uvicorn
     args, unknown = parser.parse_known_args()
@@ -82,9 +84,20 @@ def parse_args():
 
 # Get configuration
 config = parse_args()
-SOURCE_DIR = config.source_dir
 
+# Instance-specific configuration based on instance name
+INSTANCE_NAME = config.instance_name
+SOURCE_DIR = config.source_dir or f'source_tables_{INSTANCE_NAME}'
+
+# Add instance-specific file logging
+file_handler = logging.FileHandler(f'dashboard_{INSTANCE_NAME}.log')
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logging.getLogger().addHandler(file_handler)
+
+logger = logging.getLogger(__name__)
+logger.info(f"📊 Instance: {INSTANCE_NAME}")
 logger.info(f"📊 Using source directory: {SOURCE_DIR}")
+logger.info(f"📊 Instance-specific log file: dashboard_{INSTANCE_NAME}.log")
 
 # Create main app
 app = FastAPI(title="Layer Values Dashboard", version="1.0.0")
@@ -984,7 +997,7 @@ def load_csv_files():
         logger.info(f"📂 Found {len(table_files)} table files...")
         
         # Limit historical tables to prevent memory issues
-        max_historical_tables = 5  # Only keep last 5 historical tables
+        max_historical_tables = 20  # Load more historical tables (increased from 5)
         
         tables_info = []
         total_rows = 0
@@ -1236,8 +1249,15 @@ async def startup_event():
     # Initialize and start reporter fetcher if available
     if REPORTER_FETCHER_AVAILABLE:
         try:
-            # Path to the layerd binary (relative to backend directory)
-            binary_path = Path("../layerd")
+            # Path to the layerd binary (instance-specific, relative to backend directory)
+            binary_path = Path(f"../layerd_{INSTANCE_NAME}")
+            if not binary_path.exists():
+                # Fallback to generic layerd if instance-specific doesn't exist
+                binary_path = Path("../layerd")
+                logger.info(f"🔗 Instance-specific binary ../layerd_{INSTANCE_NAME} not found, using ../layerd")
+            else:
+                logger.info(f"🔗 Using instance-specific binary: ../layerd_{INSTANCE_NAME}")
+                
             if binary_path.exists():
                 logger.info("🔗 Initializing reporter fetcher...")
                 reporter_fetcher = ReporterFetcher(
@@ -1289,7 +1309,7 @@ async def shutdown_event():
 @app.get("/")
 async def root_redirect():
     """Redirect root to dashboard"""
-    return {"message": "Layer Values Dashboard API", "dashboard_url": "/dashboard-mainnet/"}
+    return {"message": f"Layer Values Dashboard API ({INSTANCE_NAME})", "dashboard_url": f"{MOUNT_PATH}/"}
 
 # Dashboard sub-application routes
 @dashboard_app.get("/")
@@ -1303,9 +1323,9 @@ async def serve_frontend():
     with open(html_path, 'r', encoding='utf-8') as f:
         html_content = f.read()
     
-    # Update static asset paths to be relative to /dashboard-mainnet/
-    html_content = html_content.replace('href="./static/', 'href="/dashboard-mainnet/static/')
-    html_content = html_content.replace('src="./static/', 'src="/dashboard-mainnet/static/')
+    # Update static asset paths to be relative to instance-specific mount path
+    html_content = html_content.replace('href="./static/', f'href="{MOUNT_PATH}/static/')
+    html_content = html_content.replace('src="./static/', f'src="{MOUNT_PATH}/static/')
     
     return HTMLResponse(content=html_content)
 
@@ -1320,9 +1340,9 @@ async def serve_reporters_page():
     with open(html_path, 'r', encoding='utf-8') as f:
         html_content = f.read()
     
-    # Update static asset paths to be relative to /dashboard-mainnet/
-    html_content = html_content.replace('href="./static/', 'href="/dashboard-mainnet/static/')
-    html_content = html_content.replace('src="./static/', 'src="/dashboard-mainnet/static/')
+    # Update static asset paths to be relative to instance-specific mount path
+    html_content = html_content.replace('href="./static/', f'href="{MOUNT_PATH}/static/')
+    html_content = html_content.replace('src="./static/', f'src="{MOUNT_PATH}/static/')
     
     return HTMLResponse(content=html_content)
 
@@ -1331,6 +1351,11 @@ async def serve_reporters_page():
 async def get_info():
     """Get information about loaded data"""
     info = data_info.copy()
+    
+    # Add instance-specific information
+    info["instance_name"] = INSTANCE_NAME
+    info["mount_path"] = MOUNT_PATH
+    info["source_directory"] = SOURCE_DIR
     
     # Add more detailed information
     if data_info.get("active_table"):
@@ -3273,8 +3298,10 @@ async def trigger_historical_maximal_power():
 # Mount static files for dashboard
 dashboard_app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 
-# Mount dashboard sub-application
-app.mount("/dashboard-mainnet", dashboard_app)
+# Mount dashboard sub-application with instance-specific path
+MOUNT_PATH = f"/dashboard-{INSTANCE_NAME}"
+app.mount(MOUNT_PATH, dashboard_app)
+logger.info(f"📊 Dashboard mounted at: {MOUNT_PATH}")
 
 # Add after existing middleware
 @app.middleware("http")
@@ -3319,4 +3346,4 @@ async def cellular_optimization_middleware(request: Request, call_next):
         raise
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True) 
+    uvicorn.run(app, host="0.0.0.0", port=8001, reload=True) 

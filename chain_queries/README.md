@@ -18,7 +18,7 @@ This directory contains the implementation for fetching and storing Tellor repor
 3. **Database Integration**: Stores reporter metadata in a separate `reporters` table in DuckDB
 4. **Unknown Reporter Handling**: Creates placeholder entries for reporters found in transaction data but not yet in the reporters table
 5. **API Endpoints**: New REST API endpoints for accessing reporter data
-6. **Frontend Page**: Separate reporters page at `/dashboard-mainnet/reporters`
+6. **Frontend Page**: Separate reporters page at `/dashboard-palmito/reporters`
 7. **Background Processing**: Runs in a separate thread without blocking the main dashboard
 
 ### 📊 Database Schema
@@ -58,7 +58,7 @@ The reporter fetcher is configured in the main backend startup:
 
 ### 📡 API Endpoints
 
-New endpoints available at `/dashboard-mainnet/api/`:
+New endpoints available at `/dashboard-palmito/api/`:
 
 - **`GET /reporters`** - Paginated list of reporters with filtering/sorting
 - **`GET /reporters/{address}`** - Detailed information about a specific reporter
@@ -67,7 +67,7 @@ New endpoints available at `/dashboard-mainnet/api/`:
 
 ### 🌐 Frontend
 
-- **Reporters Page**: Available at `/dashboard-mainnet/reporters`
+- **Reporters Page**: Available at `/dashboard-palmito/reporters`
 - **Features**: Search, filter, sort, pagination
 - **Real-time**: Auto-refreshes every 5 minutes
 - **Mobile-friendly**: Responsive design
@@ -92,8 +92,8 @@ The reporter fetcher will automatically start if the `layerd` binary is found at
 
 ### Accessing Reporter Data
 
-1. **Web Interface**: Visit `http://localhost:8000/dashboard-mainnet/reporters`
-2. **API**: Use the REST endpoints at `http://localhost:8000/dashboard-mainnet/api/reporters*`
+1. **Web Interface**: Visit `http://localhost:8001/dashboard-palmito/reporters`
+2. **API**: Use the REST endpoints at `http://localhost:8001/dashboard-palmito/api/reporters*`
 3. **Database**: Query the `reporters` table directly
 
 ## Requirements
@@ -121,7 +121,7 @@ The reporter fetcher will automatically start if the `layerd` binary is found at
 Check the fetcher status:
 
 ```bash
-curl http://localhost:8000/dashboard-mainnet/api/reporter-fetcher-status
+curl http://localhost:8001/dashboard-palmito/api/reporter-fetcher-status
 ```
 
 Response includes:

@@ -25,10 +25,10 @@ uv venv && source .venv/bin/activate
 3. **Start the dashboard**
 
 ```sh
-uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-values-monitor/logs/ --port 8000
+uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-values-monitor/logs/ --port 8001
 ```
 
-4. **Open your browser** and go to: `http://localhost:8000/dashboard-mainnet/` (or your custom port)
+4. **Open your browser** and go to: `http://localhost:8001/dashboard-palmito/` (or your custom port)
 
 ## Usage
 
@@ -40,15 +40,15 @@ uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-val
 
 ### API Endpoints
 
-The backend provides RESTful API endpoints under `/dashboard-mainnet/api/`:
+The backend provides RESTful API endpoints under `/dashboard-palmito/api/`:
 
-- `GET /dashboard-mainnet/api/info` - Data source information
-- `GET /dashboard-mainnet/api/stats` - Statistical overview
-- `GET /dashboard-mainnet/api/data` - Paginated data with filtering
-- `GET /dashboard-mainnet/api/search` - Full-text search
-- `GET /dashboard-mainnet/api/analytics` - Analytics data for different timeframes
+- `GET /dashboard-palmito/api/info` - Data source information
+- `GET /dashboard-palmito/api/stats` - Statistical overview
+- `GET /dashboard-palmito/api/data` - Paginated data with filtering
+- `GET /dashboard-palmito/api/search` - Full-text search
+- `GET /dashboard-palmito/api/analytics` - Analytics data for different timeframes
 
-Visit `http://localhost:8000/docs` for interactive API documentation.
+Visit `http://localhost:8001/docs` for interactive API documentation.
 
 ## Data Format
 
@@ -87,7 +87,7 @@ python start_dashboard.py [options]
 
 Options:
   --source-dir, -s    Directory containing CSV files (default: source_tables)
-  --port, -p          Port to run server on (default: 8000)
+  --port, -p          Port to run server on (default: 8001)
   --host              Host to bind server to (default: 0.0.0.0)
   --help, -h          Show help message
 ```
@@ -120,7 +120,7 @@ Options:
 Run with debug logging:
 ```bash
 cd backend
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload --log-level debug
 ```
 
 ## Security Notes
