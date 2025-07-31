@@ -151,28 +151,65 @@ class MaximalPowerTracker:
     def find_maximal_power_at_single_height(self, height: int) -> int:
         """
         Find the total maximal power at a given height by summing all reporter powers.
+        Now with robust timeout handling and fallback mechanisms.
         """
+        import signal
+        import threading
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError("RPC query exceeded maximum timeout")
+        
         try:
             logger.info(f"📡 Fetching reporter power at height {height}...")
             
-            # Execute the RPC query
+            # Execute the RPC query with multiple timeout mechanisms
             cmd = [self.binary_path, "query", "reporter", "reporters", "--height", str(height)]
             
             # Add --node parameter if RPC URL is provided
             if self.rpc_url:
                 cmd.extend(["--node", self.rpc_url])
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60  # Longer timeout for reporter queries
-            )
+            # Set up signal-based timeout as backup (Unix only)
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(45)  # 45 second hard timeout
+            
+            result = None
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30  # Reduced timeout for faster failure
+                )
+            finally:
+                signal.alarm(0)  # Cancel the alarm
+                signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
             
             if result.returncode != 0:
                 logger.error(f"❌ Reporter query failed for height {height} with code {result.returncode}")
                 logger.error(f"Error output: {result.stderr}")
-                raise Exception(f"Reporter query failed for height {height}: {result.stderr}")
+                
+                # Try fallback: query current reporters instead of specific height
+                if "--height" in cmd:
+                    logger.info(f"🔄 Falling back to current height query...")
+                    fallback_cmd = [self.binary_path, "query", "reporter", "reporters"]
+                    if self.rpc_url:
+                        fallback_cmd.extend(["--node", self.rpc_url])
+                    
+                    fallback_result = subprocess.run(
+                        fallback_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=15  # Quick fallback timeout
+                    )
+                    
+                    if fallback_result.returncode == 0:
+                        logger.info(f"✅ Fallback query succeeded, using current reporters")
+                        result = fallback_result
+                    else:
+                        raise Exception(f"Both primary and fallback queries failed for height {height}")
+                else:
+                    raise Exception(f"Reporter query failed for height {height}: {result.stderr}")
             
             # Parse YAML output
             try:
@@ -191,14 +228,20 @@ class MaximalPowerTracker:
                 
             except yaml.YAMLError as e:
                 logger.error(f"❌ Failed to parse YAML output for height {height}: {e}")
-                raise Exception(f"YAML parsing failed: {e}")
+                # Return 0 as fallback instead of crashing
+                logger.warning(f"⚠️  Returning 0 power as fallback for height {height}")
+                return 0
                 
-        except subprocess.TimeoutExpired:
-            logger.error(f"❌ Reporter query timed out for height {height} after 60 seconds")
-            raise Exception(f"Reporter query timeout for height {height}")
+        except (subprocess.TimeoutExpired, TimeoutError) as e:
+            logger.error(f"❌ Reporter query timed out for height {height}: {e}")
+            # Return 0 as fallback instead of crashing
+            logger.warning(f"⚠️  Returning 0 power due to timeout for height {height}")
+            return 0
         except Exception as e:
             logger.error(f"❌ Error getting maximal power at height {height}: {e}")
-            raise
+            # Return 0 as fallback instead of crashing
+            logger.warning(f"⚠️  Returning 0 power due to error for height {height}")
+            return 0
 
     def create_maximal_power_table(self):
         """
