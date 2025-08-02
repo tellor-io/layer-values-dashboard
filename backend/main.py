@@ -997,7 +997,7 @@ def load_csv_files():
         logger.info(f"📂 Found {len(table_files)} table files...")
         
         # Limit historical tables to prevent memory issues
-        max_historical_tables = 20  # Load more historical tables (increased from 5)
+        max_historical_tables = 100  # Load more historical tables (increased from 5)
         
         tables_info = []
         total_rows = 0
@@ -1141,7 +1141,7 @@ def periodic_reload():
                     available_mb = psutil.virtual_memory().available / 1024 / 1024
                     
                     # Skip reload if memory is critically low or process is using too much
-                    if available_mb < 500 or memory_mb > 4000:
+                    if available_mb < 500 or memory_mb > 16000:
                         logger.warning(f"⚠️  Skipping reload due to memory constraints (Process: {memory_mb:.0f} MB, Available: {available_mb:.0f} MB)")
                         time.sleep(30)  # Wait before next check
                         continue
