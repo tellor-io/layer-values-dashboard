@@ -861,15 +861,33 @@
         // Initialize the app
         const app = new ReportersApp();
         
-        // Auto-refresh every 5 minutes
+        // Auto-refresh every 5 minutes with individual error handling
         setInterval(async () => {
+            console.log('🔄 Auto-refresh started...');
+            
+            // Load each component individually with error handling to prevent freezing
             try {
                 await app.loadReporterActivityAnalytics(app.currentTimeframe);
-                await app.loadSummary();
-                await app.loadReporters();
+                console.log('✅ Auto-refresh: Analytics loaded');
             } catch (error) {
-                console.error('Auto-refresh error:', error);
+                console.error('❌ Auto-refresh error loading analytics:', error);
             }
+            
+            try {
+                await app.loadSummary();
+                console.log('✅ Auto-refresh: Summary loaded');
+            } catch (error) {
+                console.error('❌ Auto-refresh error loading summary:', error);
+            }
+            
+            try {
+                await app.loadReporters();
+                console.log('✅ Auto-refresh: Reporters loaded');
+            } catch (error) {
+                console.error('❌ Auto-refresh error loading reporters:', error);
+            }
+            
+            console.log('🔄 Auto-refresh completed');
         }, 5 * 60 * 1000);
     </script>
 </body>

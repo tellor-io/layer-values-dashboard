@@ -361,19 +361,38 @@ class ReporterFetcher:
             logger.info(f"🔄 Starting periodic reporter updates every {self.update_interval} seconds")
             logger.info(f"🔋 Maximal power updates every {self.maximal_power_interval} seconds")
             
+            consecutive_failures = 0
+            max_consecutive_failures = 5
+            
             while self.is_running:
                 try:
                     success = self.fetch_and_store(db_connection)
                     if success:
                         logger.info("✅ Periodic reporter update completed successfully")
+                        consecutive_failures = 0  # Reset failure counter on success
                     else:
-                        logger.error("❌ Periodic reporter update failed")
+                        consecutive_failures += 1
+                        logger.error(f"❌ Periodic reporter update failed (attempt {consecutive_failures}/{max_consecutive_failures})")
+                        
+                        # Log more detailed error info for debugging
+                        if consecutive_failures >= max_consecutive_failures:
+                            logger.error("🚨 Maximum consecutive failures reached - reporter fetcher may need manual intervention")
+                            logger.error("🔍 Check network connectivity, binary availability, and RPC endpoint status")
                     
                     # Wait for the next update
                     time.sleep(self.update_interval)
                     
                 except Exception as e:
-                    logger.error(f"❌ Error in periodic update loop: {e}")
+                    consecutive_failures += 1
+                    logger.error(f"❌ Exception in periodic update loop (attempt {consecutive_failures}/{max_consecutive_failures}): {e}")
+                    
+                    # Log stack trace for debugging
+                    import traceback
+                    logger.error(f"📋 Full traceback:\n{traceback.format_exc()}")
+                    
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.error("🚨 Too many consecutive exceptions - reporter fetcher may need manual intervention")
+                    
                     time.sleep(self.update_interval)  # Still wait before retrying
         
         self.fetch_thread = threading.Thread(target=update_loop, daemon=True)

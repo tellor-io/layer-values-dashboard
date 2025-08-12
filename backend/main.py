@@ -3118,9 +3118,33 @@ async def get_reporters_activity_analytics(
 
 @dashboard_app.get("/api/reporters-summary")
 async def get_reporters_summary():
-    # Get summary statistics about reporters
+    # Get summary statistics about reporters with graceful fallback
     try:
         with db_lock:
+            # Check if reporters table exists and has data
+            table_check = conn.execute("""
+                SELECT COUNT(*) FROM reporters
+            """).fetchone()
+            
+            reporters_count = safe_get(table_check, 0, 0)
+            
+            if reporters_count == 0:
+                logger.warning("⚠️  Reporters table is empty - reporter fetcher may be down")
+                # Return fallback data when reporters table is empty
+                return {
+                    "summary": {
+                        "total_reporters": 0,
+                        "jailed_reporters": 0,
+                        "active_reporters": 0,
+                        "avg_power": 0.0,
+                        "max_power": 0,
+                        "total_power": 0
+                    },
+                    "top_reporters": [],
+                    "commission_distribution": [],
+                    "error": "Reporter data unavailable - fetcher service may be experiencing issues"
+                }
+            
             # Get basic stats with proper active_24h calculation
             summary_result = conn.execute("""
                 SELECT 
@@ -3188,7 +3212,21 @@ async def get_reporters_summary():
             
     except Exception as e:
         logger.error(f"❌ Error getting reporters summary: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get reporters summary: {str(e)}")
+        # Return fallback data instead of raising an exception to prevent frontend freezing
+        logger.warning("🔄 Returning fallback reporters summary data")
+        return {
+            "summary": {
+                "total_reporters": 0,
+                "jailed_reporters": 0,
+                "active_reporters": 0,
+                "avg_power": 0.0,
+                "max_power": 0,
+                "total_power": 0
+            },
+            "top_reporters": [],
+            "commission_distribution": [],
+            "error": f"Reporter summary error: {str(e)}"
+        }
 
 @dashboard_app.get("/api/reporter-fetcher-status")
 async def get_reporter_fetcher_status():
