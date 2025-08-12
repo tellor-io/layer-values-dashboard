@@ -221,8 +221,8 @@ def main():
         print("\n📋 Next steps:")
         print("   1. Start the dashboard: python start_dashboard.py")
         print("   2. The reporter fetcher will automatically start fetching data every 60 seconds")
-        print("   3. Visit http://localhost:8000/dashboard-mainnet/reporters to see the reporters page")
-        print("   4. Check http://localhost:8000/dashboard-mainnet/api/reporter-fetcher-status for fetcher status")
+        print("   3. Visit http://localhost:8001/dashboard-palmito/reporters to see the reporters page")
+        print("   4. Check http://localhost:8001/dashboard-palmito/api/reporter-fetcher-status for fetcher status")
         
     except Exception as e:
         print(f"❌ Test failed: {e}")

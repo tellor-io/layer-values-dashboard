@@ -29,12 +29,12 @@ function checkCellularConnection() {
 }
 
 // Cellular-optimized configuration
-const REQUEST_TIMEOUT = IS_CELLULAR ? 8000 : (IS_MOBILE ? 15000 : 30000);
+const REQUEST_TIMEOUT = IS_CELLULAR ? 8001 : (IS_MOBILE ? 15000 : 30000);
 const MAX_RETRIES = IS_CELLULAR ? 1 : (IS_MOBILE ? 2 : 3);
 
 // Configuration with mobile detection
 const RECORDS_PER_PAGE = 100;
-const API_BASE = '/dashboard-mainnet';
+let API_BASE = '/dashboard-palmito'; // Default, will be updated from backend config
 
 // DOM elements
 const elements = {
@@ -316,26 +316,67 @@ const showCellularErrorMessage = (error) => {
         if (errorDiv.parentElement) {
             errorDiv.remove();
         }
-    }, 8000);
+    }, 8001);
+};
+
+// Initialize configuration from backend
+const initializeConfig = async () => {
+    try {
+        // Use the default API_BASE to fetch configuration
+        const url = new URL(`${API_BASE}/api/info`, window.location.origin);
+        const response = await fetch(url);
+        if (response.ok) {
+            const info = await response.json();
+            if (info.mount_path) {
+                API_BASE = info.mount_path;
+                console.log(`📊 API_BASE updated to: ${API_BASE}`);
+            }
+        }
+    } catch (error) {
+        console.warn('Failed to load configuration, using default API_BASE:', error);
+    }
 };
 
 const loadStats = async (forceRefresh = false) => {
+    // Load APIs individually with graceful error handling to prevent freezing
+    let info = null;
+    let stats = null;
+    let reportersSummary = null;
+    
+    // Load core info - this should almost never fail
     try {
-        const [info, stats, reportersSummary] = await Promise.all([
-            apiCall('/info', {}, MAX_RETRIES, forceRefresh),
-            apiCall('/stats', {}, MAX_RETRIES, forceRefresh),
-            apiCall('/reporters-summary', {}, MAX_RETRIES, forceRefresh)
-        ]);
-        
-        // Update header stats
+        info = await apiCall('/info', {}, MAX_RETRIES, forceRefresh);
         elements.totalRecords.textContent = formatNumber(info.total_rows);
-        
-        // Update stats cards
+    } catch (error) {
+        console.error('Failed to load info:', error);
+        elements.totalRecords.textContent = 'Error';
+    }
+    
+    // Load stats - this is critical for dashboard functionality
+    try {
+        stats = await apiCall('/stats', {}, MAX_RETRIES, forceRefresh);
         elements.uniqueReporters.textContent = formatNumber(stats.unique_reporters);
         elements.uniqueQueryIds30d.textContent = formatNumber(stats.unique_query_ids_30d);
-        
-        // Calculate reporting power utilization percentage
-        if (stats.active_reporter_power && reportersSummary.summary && reportersSummary.summary.total_power) {
+        elements.recentActivity.textContent = formatNumber(stats.recent_activity);
+    } catch (error) {
+        console.error('Failed to load stats:', error);
+        elements.uniqueReporters.textContent = 'Error';
+        elements.uniqueQueryIds30d.textContent = 'Error';
+        elements.recentActivity.textContent = 'Error';
+    }
+    
+    // Load reporters summary - this might fail if reporter fetcher is down
+    try {
+        reportersSummary = await apiCall('/reporters-summary', {}, MAX_RETRIES, forceRefresh);
+    } catch (error) {
+        console.error('Failed to load reporters summary:', error);
+        // Set fallback values to prevent further errors
+        reportersSummary = { summary: { total_power: null } };
+    }
+    
+    // Calculate reporting power utilization percentage with error handling
+    try {
+        if (stats && stats.active_reporter_power && reportersSummary.summary && reportersSummary.summary.total_power) {
             const reportingPower = stats.active_reporter_power;
             const totalRegistryPower = reportersSummary.summary.total_power;
             const utilizationPercent = (reportingPower / totalRegistryPower * 100).toFixed(1);
@@ -350,11 +391,15 @@ const loadStats = async (forceRefresh = false) => {
         } else {
             elements.totalPotentialPower.textContent = '-';
         }
-        
-        elements.recentActivity.textContent = formatNumber(stats.recent_activity);
-        
-        // Update questionable values
-        if (stats.questionable_values) {
+    } catch (error) {
+        console.error('Error calculating power metrics:', error);
+        elements.totalReporterPower.textContent = 'Error';
+        elements.totalPotentialPower.textContent = 'Error';
+    }
+    
+    // Update questionable values with error handling
+    try {
+        if (stats && stats.questionable_values) {
             elements.questionableValues.textContent = formatNumber(stats.questionable_values.total);
             
             // Update subtitle based on urgent count
@@ -378,39 +423,14 @@ const loadStats = async (forceRefresh = false) => {
             elements.questionableCard.classList.remove('urgent');
             elements.urgentIndicator.style.display = 'none';
         }
-        
-        // Populate filter dropdowns
-        // Note: Commenting out filter dropdowns that don't exist in the HTML
-        // to prevent JavaScript errors that stop loadStats from completing
-        /*
-        if (stats.query_types) {
-            elements.filterQueryType.innerHTML = '<option value="">All Types</option>';
-            stats.query_types.forEach(type => {
-                const option = document.createElement('option');
-                option.value = type.QUERY_TYPE;
-                option.textContent = `${type.QUERY_TYPE} (${type.count})`;
-                elements.filterQueryType.appendChild(option);
-            });
-        }
-        
-        // Populate reporter dropdown
-        if (stats.top_reporters) {
-            elements.filterReporter.innerHTML = '<option value="">All Reporters</option>';
-            stats.top_reporters.forEach(reporter => {
-                const option = document.createElement('option');
-                option.value = reporter.REPORTER;
-                const shortReporter = reporter.REPORTER.length > 20 
-                    ? reporter.REPORTER.substring(0, 20) + '...' 
-                    : reporter.REPORTER;
-                option.textContent = `${shortReporter} (${reporter.count})`;
-                option.title = reporter.REPORTER; // Full address on hover
-                elements.filterReporter.appendChild(option);
-            });
-        }
-        */
-        
-        // Populate query ID dropdown (only for power analytics modal)
-        if (stats.top_query_ids && elements.queryIdSelect) {
+    } catch (error) {
+        console.error('Error updating questionable values:', error);
+        elements.questionableValues.textContent = 'Error';
+    }
+    
+    // Populate query ID dropdown with error handling
+    try {
+        if (stats && stats.top_query_ids && elements.queryIdSelect) {
             elements.queryIdSelect.innerHTML = '<option value="">Overall (All Query IDs)</option>';
             stats.top_query_ids.forEach(queryId => {
                 const option = document.createElement('option');
@@ -423,18 +443,25 @@ const loadStats = async (forceRefresh = false) => {
                 elements.queryIdSelect.appendChild(option);
             });
         }
-        
-        totalRecords = stats.total_rows;
-        
-        // Update agreement card
-        if (stats.average_agreement !== null) {
-            elements.averageAgreement.textContent = `${stats.average_agreement.toFixed(2)}%`;
-        } else {
-            elements.averageAgreement.textContent = '-';
-        }
-        
     } catch (error) {
-        console.error('Failed to load stats:', error);
+        console.error('Error populating query ID dropdown:', error);
+    }
+    
+    // Update total records and agreement card with error handling
+    try {
+        if (stats) {
+            totalRecords = stats.total_rows;
+            
+            // Update agreement card
+            if (stats.average_agreement !== null) {
+                elements.averageAgreement.textContent = `${stats.average_agreement.toFixed(2)}%`;
+            } else {
+                elements.averageAgreement.textContent = '-';
+            }
+        }
+    } catch (error) {
+        console.error('Error updating records and agreement:', error);
+        elements.averageAgreement.textContent = 'Error';
     }
 };
 
@@ -1931,6 +1958,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Set and display load time
     updateLoadTime();
     
+    // Initialize configuration from backend
+    await initializeConfig();
+    
+    // Update reporters link after configuration is loaded
+    const reportersLink = document.getElementById('reporters-link');
+    if (reportersLink) {
+        reportersLink.href = `${API_BASE}/reporters`;
+    }
+    
     // Initial load
     await loadStats();
     await loadData();
@@ -1954,7 +1990,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.headerSearchBtn.addEventListener('click', () => {
         const query = elements.headerSearchInput.value.trim();
         if (query) {
-            window.location.href = `/dashboard-mainnet/search?q=${encodeURIComponent(query)}`;
+            window.location.href = `${API_BASE}/search?q=${encodeURIComponent(query)}`;
         }
     });
     
@@ -1962,7 +1998,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Enter') {
             const query = elements.headerSearchInput.value.trim();
             if (query) {
-                window.location.href = `/dashboard-mainnet/search?q=${encodeURIComponent(query)}`;
+                window.location.href = `${API_BASE}/search?q=${encodeURIComponent(query)}`;
             }
         }
     });

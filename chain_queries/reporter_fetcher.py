@@ -258,8 +258,17 @@ class ReporterFetcher:
     def update_maximal_power_if_needed(self, db_connection):
         """
         Update maximal power data if enough time has passed since the last update.
+        Now with robust error handling and configuration option.
         """
+        # Configuration: Set to True to enable maximal power tracking
+        ENABLE_MAXIMAL_POWER = os.getenv('ENABLE_MAXIMAL_POWER', 'false').lower() == 'true'
+        
+        if not ENABLE_MAXIMAL_POWER:
+            logger.debug("🚫 Maximal power updates disabled (set ENABLE_MAXIMAL_POWER=true to enable)")
+            return
+        
         if not self.maximal_power_tracker:
+            logger.warning("⚠️  Maximal power tracker not initialized, skipping update")
             return
         
         try:
@@ -269,13 +278,40 @@ class ReporterFetcher:
             if (self.last_maximal_power_update is None or 
                 (current_time - self.last_maximal_power_update).total_seconds() >= self.maximal_power_interval):
                 
-                logger.info("🔋 Updating maximal power snapshot...")
-                self.maximal_power_tracker.update_realtime_maximal_power()
-                self.last_maximal_power_update = current_time
-                logger.info("✅ Maximal power snapshot updated")
+                logger.info("🔋 Updating maximal power snapshot (with improved timeout handling)...")
+                
+                # Use a separate thread with timeout to prevent hanging the main process
+                import threading
+                result = [None]  # Use list to store result from thread
+                exception = [None]
+                
+                def update_worker():
+                    try:
+                        self.maximal_power_tracker.update_realtime_maximal_power()
+                        result[0] = True
+                    except Exception as e:
+                        exception[0] = e
+                
+                update_thread = threading.Thread(target=update_worker, daemon=True)
+                update_thread.start()
+                update_thread.join(timeout=120)  # 2 minute timeout for the entire operation
+                
+                if update_thread.is_alive():
+                    logger.error("❌ Maximal power update timed out after 2 minutes, skipping")
+                    return
+                
+                if exception[0]:
+                    raise exception[0]
+                
+                if result[0]:
+                    self.last_maximal_power_update = current_time
+                    logger.info("✅ Maximal power snapshot updated successfully")
+                else:
+                    logger.warning("⚠️  Maximal power update completed but result unclear")
             
         except Exception as e:
             logger.error(f"❌ Error updating maximal power: {e}")
+            # Don't re-raise the exception to prevent disrupting the main reporter fetch loop
 
     def fetch_and_store(self, db_connection) -> bool:
         """
@@ -325,19 +361,38 @@ class ReporterFetcher:
             logger.info(f"🔄 Starting periodic reporter updates every {self.update_interval} seconds")
             logger.info(f"🔋 Maximal power updates every {self.maximal_power_interval} seconds")
             
+            consecutive_failures = 0
+            max_consecutive_failures = 5
+            
             while self.is_running:
                 try:
                     success = self.fetch_and_store(db_connection)
                     if success:
                         logger.info("✅ Periodic reporter update completed successfully")
+                        consecutive_failures = 0  # Reset failure counter on success
                     else:
-                        logger.error("❌ Periodic reporter update failed")
+                        consecutive_failures += 1
+                        logger.error(f"❌ Periodic reporter update failed (attempt {consecutive_failures}/{max_consecutive_failures})")
+                        
+                        # Log more detailed error info for debugging
+                        if consecutive_failures >= max_consecutive_failures:
+                            logger.error("🚨 Maximum consecutive failures reached - reporter fetcher may need manual intervention")
+                            logger.error("🔍 Check network connectivity, binary availability, and RPC endpoint status")
                     
                     # Wait for the next update
                     time.sleep(self.update_interval)
                     
                 except Exception as e:
-                    logger.error(f"❌ Error in periodic update loop: {e}")
+                    consecutive_failures += 1
+                    logger.error(f"❌ Exception in periodic update loop (attempt {consecutive_failures}/{max_consecutive_failures}): {e}")
+                    
+                    # Log stack trace for debugging
+                    import traceback
+                    logger.error(f"📋 Full traceback:\n{traceback.format_exc()}")
+                    
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.error("🚨 Too many consecutive exceptions - reporter fetcher may need manual intervention")
+                    
                     time.sleep(self.update_interval)  # Still wait before retrying
         
         self.fetch_thread = threading.Thread(target=update_loop, daemon=True)
