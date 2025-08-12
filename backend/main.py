@@ -77,6 +77,9 @@ def parse_args():
     parser.add_argument('--instance-name', 
                        default=os.getenv('LAYER_INSTANCE_NAME', 'palmito'),
                        help='Instance name for this dashboard (default: palmito)')
+    parser.add_argument('--mount-path', 
+                       default=os.getenv('MOUNT_PATH', None),
+                       help='Mount path for the dashboard (default: /dashboard-{instance_name})')
     
     # Only parse known args to avoid conflicts with uvicorn
     args, unknown = parser.parse_known_args()
@@ -88,6 +91,7 @@ config = parse_args()
 # Instance-specific configuration based on instance name
 INSTANCE_NAME = config.instance_name
 SOURCE_DIR = config.source_dir or f'source_tables_{INSTANCE_NAME}'
+MOUNT_PATH = config.mount_path or f'/dashboard-{INSTANCE_NAME}'
 
 # Add instance-specific file logging
 file_handler = logging.FileHandler(f'dashboard_{INSTANCE_NAME}.log')
@@ -97,6 +101,7 @@ logging.getLogger().addHandler(file_handler)
 logger = logging.getLogger(__name__)
 logger.info(f"📊 Instance: {INSTANCE_NAME}")
 logger.info(f"📊 Using source directory: {SOURCE_DIR}")
+logger.info(f"📊 Mount path: {MOUNT_PATH}")
 logger.info(f"📊 Instance-specific log file: dashboard_{INSTANCE_NAME}.log")
 
 # Create main app
@@ -3337,7 +3342,6 @@ async def trigger_historical_maximal_power():
 dashboard_app.mount("/static", StaticFiles(directory="../frontend"), name="static")
 
 # Mount dashboard sub-application with instance-specific path
-MOUNT_PATH = f"/dashboard-{INSTANCE_NAME}"
 app.mount(MOUNT_PATH, dashboard_app)
 logger.info(f"📊 Dashboard mounted at: {MOUNT_PATH}")
 

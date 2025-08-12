@@ -57,7 +57,7 @@ let isLoading = false;
 
 // Configuration
 const RECORDS_PER_PAGE = 100;
-const API_BASE = '/dashboard-palmito';
+let API_BASE = '/dashboard-palmito'; // Default, will be updated from backend config
 
 // DOM elements
 const elements = {
@@ -157,6 +157,24 @@ const showLoading = () => {
 const hideLoading = () => {
     isLoading = false;
     elements.loadingOverlay.classList.add('hidden');
+};
+
+// Initialize configuration from backend
+const initializeConfig = async () => {
+    try {
+        // Use the default API_BASE to fetch configuration
+        const url = new URL(`${API_BASE}/api/info`, window.location.origin);
+        const response = await fetch(url);
+        if (response.ok) {
+            const info = await response.json();
+            if (info.mount_path) {
+                API_BASE = info.mount_path;
+                console.log(`📊 Search API_BASE updated to: ${API_BASE}`);
+            }
+        }
+    } catch (error) {
+        console.warn('Failed to load configuration, using default API_BASE:', error);
+    }
 };
 
 // API call function
@@ -459,7 +477,10 @@ const updatePagination = () => {
 };
 
 // Initialize page
-const initializePage = () => {
+const initializePage = async () => {
+    // Initialize configuration first
+    await initializeConfig();
+    
     // Get search query from URL
     const urlParams = new URLSearchParams(window.location.search);
     const query = urlParams.get('q');
@@ -470,7 +491,7 @@ const initializePage = () => {
         performSearch(query, page);
     } else {
         // Redirect to dashboard if no search query
-        window.location.href = '/dashboard-palmito';
+        window.location.href = API_BASE;
     }
 };
 

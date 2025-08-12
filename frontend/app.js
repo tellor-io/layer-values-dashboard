@@ -34,7 +34,7 @@ const MAX_RETRIES = IS_CELLULAR ? 1 : (IS_MOBILE ? 2 : 3);
 
 // Configuration with mobile detection
 const RECORDS_PER_PAGE = 100;
-const API_BASE = '/dashboard-palmito';
+let API_BASE = '/dashboard-palmito'; // Default, will be updated from backend config
 
 // DOM elements
 const elements = {
@@ -317,6 +317,24 @@ const showCellularErrorMessage = (error) => {
             errorDiv.remove();
         }
     }, 8001);
+};
+
+// Initialize configuration from backend
+const initializeConfig = async () => {
+    try {
+        // Use the default API_BASE to fetch configuration
+        const url = new URL(`${API_BASE}/api/info`, window.location.origin);
+        const response = await fetch(url);
+        if (response.ok) {
+            const info = await response.json();
+            if (info.mount_path) {
+                API_BASE = info.mount_path;
+                console.log(`📊 API_BASE updated to: ${API_BASE}`);
+            }
+        }
+    } catch (error) {
+        console.warn('Failed to load configuration, using default API_BASE:', error);
+    }
 };
 
 const loadStats = async (forceRefresh = false) => {
@@ -1940,6 +1958,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Set and display load time
     updateLoadTime();
     
+    // Initialize configuration from backend
+    await initializeConfig();
+    
+    // Update reporters link after configuration is loaded
+    const reportersLink = document.getElementById('reporters-link');
+    if (reportersLink) {
+        reportersLink.href = `${API_BASE}/reporters`;
+    }
+    
     // Initial load
     await loadStats();
     await loadData();
@@ -1963,7 +1990,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.headerSearchBtn.addEventListener('click', () => {
         const query = elements.headerSearchInput.value.trim();
         if (query) {
-            window.location.href = `/dashboard-palmito/search?q=${encodeURIComponent(query)}`;
+            window.location.href = `${API_BASE}/search?q=${encodeURIComponent(query)}`;
         }
     });
     
@@ -1971,7 +1998,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Enter') {
             const query = elements.headerSearchInput.value.trim();
             if (query) {
-                window.location.href = `/dashboard-palmito/search?q=${encodeURIComponent(query)}`;
+                window.location.href = `${API_BASE}/search?q=${encodeURIComponent(query)}`;
             }
         }
     });

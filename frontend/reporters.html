@@ -123,7 +123,7 @@
                         </div>
                     </div>
                     <div class="data-controls">
-                        <a href="/dashboard-palmito/" class="btn btn-secondary">
+                        <a href="#" id="dashboard-link" class="btn btn-secondary">
                             <i class="fas fa-arrow-left"></i> Back to Dashboard
                         </a>
                         <button id="refresh-data" class="btn btn-secondary">
@@ -315,6 +315,7 @@
                 this.reporterActivityChart = null;
                 this.currentTimeframe = '24h';
                 this.isLoadingAnalytics = false;
+                this.apiBase = '/dashboard-palmito'; // Default, will be updated
                 
                 // Add mobile-specific initialization
                 if (IS_MOBILE) {
@@ -324,7 +325,36 @@
                 }
                 
                 this.initializeEventListeners();
-                this.loadInitialData();
+                this.initializeAndLoad();
+            }
+            
+            async initializeConfig() {
+                try {
+                    // Use the default apiBase to fetch configuration
+                    const url = new URL(`${this.apiBase}/api/info`, window.location.origin);
+                    const response = await fetch(url);
+                    if (response.ok) {
+                        const info = await response.json();
+                        if (info.mount_path) {
+                            this.apiBase = info.mount_path;
+                            console.log(`📊 Reporters API_BASE updated to: ${this.apiBase}`);
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Failed to load configuration, using default API_BASE:', error);
+                }
+            }
+            
+            async initializeAndLoad() {
+                await this.initializeConfig();
+                
+                // Update dashboard link after configuration is loaded
+                const dashboardLink = document.getElementById('dashboard-link');
+                if (dashboardLink) {
+                    dashboardLink.href = this.apiBase;
+                }
+                
+                await this.loadInitialData();
             }
             
             async loadInitialData() {
@@ -413,7 +443,7 @@
             
             async loadSummary() {
                 try {
-                    const response = await safeFetch('/dashboard-palmito/api/reporters-summary');
+                    const response = await safeFetch(`${this.apiBase}/api/reporters-summary`);
                     const data = await response.json();
                     
                     // Update stat cards
@@ -449,7 +479,7 @@
                         sort_by: 'power'
                     });
                     
-                    const response = await safeFetch(`/dashboard-palmito/api/reporters?${params}`);
+                    const response = await safeFetch(`${this.apiBase}/api/reporters?${params}`);
                     const data = await response.json();
                     
                     this.totalReporters = data.total;
@@ -571,7 +601,7 @@
                     loadingEl.style.display = 'flex';
                     
                     // Fetch analytics data
-                    const response = await safeFetch(`/dashboard-palmito/api/reporters-activity-analytics?timeframe=${timeframe}`);
+                    const response = await safeFetch(`${this.apiBase}/api/reporters-activity-analytics?timeframe=${timeframe}`);
                     
                     const data = await response.json();
                     

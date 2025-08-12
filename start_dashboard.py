@@ -28,12 +28,19 @@ def main():
     parser.add_argument('--host', 
                        default='0.0.0.0',
                        help='Host to bind the server to (default: 0.0.0.0)')
+    parser.add_argument('--mount-path', 
+                       default=os.getenv('MOUNT_PATH', None),
+                       help='Mount path for the dashboard (default: /dashboard-{instance_name})')
     
     args = parser.parse_args()
     
     # Set instance-specific defaults
     if not args.source_dir:
         args.source_dir = f'source_tables_{args.instance_name}'
+    
+    # Set default mount path if not provided
+    if not args.mount_path:
+        args.mount_path = f'/dashboard-{args.instance_name}'
     
     # Get the directory where this script is located
     project_root = Path(__file__).parent.absolute()
@@ -44,7 +51,7 @@ def main():
     print(f"📁 Backend directory: {backend_dir}")
     print(f"🏷️  Instance name: {args.instance_name}")
     print(f"📊 Source directory: {args.source_dir}")
-    print(f"🌐 Mount path: /dashboard-{args.instance_name}")
+    print(f"🌐 Mount path: {args.mount_path}")
     
     # Check if backend directory exists
     if not backend_dir.exists():
@@ -79,6 +86,7 @@ def main():
     # Set environment variables for the backend
     os.environ['LAYER_SOURCE_DIR'] = str(source_dir.absolute())
     os.environ['LAYER_INSTANCE_NAME'] = args.instance_name
+    os.environ['MOUNT_PATH'] = args.mount_path
     if args.layer_rpc_url:
         os.environ['LAYER_RPC_URL'] = args.layer_rpc_url
     
@@ -86,7 +94,7 @@ def main():
     os.chdir(backend_dir)
     
     print("\n🌐 Starting web server...")
-    print(f"📱 Dashboard will be available at: http://localhost:{args.port}/dashboard-{args.instance_name}/")
+    print(f"📱 Dashboard will be available at: http://localhost:{args.port}{args.mount_path}/")
     print(f"🔧 API documentation at: http://localhost:{args.port}/docs")
     print(f"📋 Log file: dashboard_{args.instance_name}.log")
     print("\n💡 Press Ctrl+C to stop the server")
