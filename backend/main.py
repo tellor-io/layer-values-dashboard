@@ -18,6 +18,8 @@ import gc
 
 import logging
 from contextlib import asynccontextmanager
+import signal
+import datetime
 
 # Configure logging for better error tracking - will be reconfigured with instance name later
 logging.basicConfig(
@@ -104,6 +106,32 @@ logger.info(f"📊 Using source directory: {SOURCE_DIR}")
 logger.info(f"📊 Mount path: {MOUNT_PATH}")
 logger.info(f"📊 Instance-specific log file: dashboard_{INSTANCE_NAME}.log")
 
+# Signal handler for graceful shutdown logging
+def signal_handler(signum, frame):
+    """Handle shutdown signals and log final health state"""
+    signal_name = signal.Signals(signum).name
+    logger.warning(f"🛑 Received signal {signal_name} ({signum})")
+    
+    try:
+        # Log final health state
+        uptime_hours = (time.time() - health_stats["startup_time"]) / 3600
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / 1024 / 1024
+        
+        logger.warning(f"🛑 SHUTDOWN - Uptime: {uptime_hours:.1f}h, Memory: {memory_mb:.1f}MB")
+        logger.warning(f"🛑 SHUTDOWN - Requests: {health_stats['request_count']}, Slow: {health_stats['slow_requests']}")
+        logger.warning(f"🛑 SHUTDOWN - Errors: DB={health_stats['database_errors']}, Locks={health_stats['lock_timeouts']}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error during shutdown logging: {e}")
+    
+    # Let the default handler take over
+    exit(signum)
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
 # Create main app
 app = FastAPI(title="Layer Values Dashboard", version="1.0.0")
 
@@ -134,19 +162,15 @@ def create_duckdb_connection():
         # Create connection with valid global options
         conn = duckdb.connect(":memory:")
         
-        # Get available memory and set a reasonable limit
+        # Set memory limit to 16GB
         try:
-            import psutil
-            total_memory_gb = psutil.virtual_memory().total / (1024**3)
-            # Use 60% of available memory, but cap at 16GB for safety
-            memory_limit_gb = min(int(total_memory_gb * 0.6), 16)
-            conn.execute(f"SET memory_limit='{memory_limit_gb}GB'")
-            logger.info(f"✅ Set memory limit to {memory_limit_gb}GB (60% of {total_memory_gb:.1f}GB total)")
+            conn.execute("SET memory_limit='16GB'")
+            logger.info("✅ Set memory limit to 16GB")
         except Exception as mem_error:
             logger.warning(f"⚠️  Could not set memory_limit: {mem_error}")
             # Fallback to a reasonable default
-            conn.execute("SET memory_limit='8GB'")
-            logger.info("✅ Using fallback memory limit of 8GB")
+            conn.execute("SET memory_limit='16GB'")
+            logger.info("✅ Using fallback memory limit of 16GB")
         
         # Set thread configuration
         conn.execute("SET threads=3")
@@ -176,6 +200,84 @@ conn = create_duckdb_connection()
 refresh_in_progress = False
 refresh_lock = threading.Lock()
 
+# Health monitoring globals
+health_stats = {
+    "startup_time": time.time(),
+    "request_count": 0,
+    "last_request_time": 0,
+    "slow_requests": 0,
+    "database_errors": 0,
+    "memory_warnings": 0,
+    "lock_timeouts": 0,
+    "last_health_check": time.time()
+}
+
+def log_system_health():
+    """Log detailed system health information"""
+    try:
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        
+        # Get system memory info
+        system_memory = psutil.virtual_memory()
+        system_memory_gb = system_memory.total / (1024**3)
+        available_memory_gb = system_memory.available / (1024**3)
+        memory_percent = system_memory.percent
+        
+        # Get CPU info
+        cpu_percent = psutil.cpu_percent(interval=1)
+        
+        # Get disk usage for temp directory
+        disk_usage = psutil.disk_usage('/tmp')
+        disk_free_gb = disk_usage.free / (1024**3)
+        
+        # Calculate uptime
+        uptime_hours = (time.time() - health_stats["startup_time"]) / 3600
+        
+        # Database connection health check
+        db_healthy = False
+        try:
+            with db_lock.acquire(timeout=5):
+                conn.execute("SELECT 1").fetchone()
+                db_healthy = True
+        except Exception as db_err:
+            health_stats["database_errors"] += 1
+            logger.error(f"🔥 Database health check failed: {db_err}")
+        
+        # Update health stats
+        health_stats["last_health_check"] = time.time()
+        time_since_last_request = time.time() - health_stats["last_request_time"]
+        
+        logger.info(f"💊 HEALTH CHECK - Uptime: {uptime_hours:.1f}h")
+        logger.info(f"💾 Process Memory: {memory_mb:.1f} MB")
+        logger.info(f"🖥️  System Memory: {memory_percent:.1f}% used ({available_memory_gb:.1f}GB/{system_memory_gb:.1f}GB available)")
+        logger.info(f"⚡ CPU Usage: {cpu_percent:.1f}%")
+        logger.info(f"💿 Disk Free (/tmp): {disk_free_gb:.1f} GB")
+        logger.info(f"🔗 Database: {'✅ Healthy' if db_healthy else '❌ Unhealthy'}")
+        logger.info(f"📊 Requests: {health_stats['request_count']} total, {health_stats['slow_requests']} slow")
+        logger.info(f"⏱️  Time since last request: {time_since_last_request:.1f}s")
+        logger.info(f"🚨 Errors: DB={health_stats['database_errors']}, Memory={health_stats['memory_warnings']}, Locks={health_stats['lock_timeouts']}")
+        
+        # Warning thresholds
+        if memory_mb > 8000:  # 8GB process memory warning
+            health_stats["memory_warnings"] += 1
+            logger.warning(f"⚠️  HIGH MEMORY USAGE: Process using {memory_mb:.1f} MB")
+        
+        if available_memory_gb < 2:  # Less than 2GB system memory available
+            logger.warning(f"⚠️  LOW SYSTEM MEMORY: Only {available_memory_gb:.1f} GB available")
+        
+        if cpu_percent > 80:
+            logger.warning(f"⚠️  HIGH CPU USAGE: {cpu_percent:.1f}%")
+        
+        if time_since_last_request > 300:  # No requests in 5 minutes
+            logger.warning(f"⚠️  NO RECENT REQUESTS: {time_since_last_request:.1f}s since last request")
+            
+    except Exception as e:
+        logger.error(f"❌ Health check failed: {e}")
+        import traceback
+        traceback.print_exc()
+
 # Use a timeout lock to prevent indefinite blocking
 import threading
 class TimeoutRLock:
@@ -184,12 +286,17 @@ class TimeoutRLock:
         self.timeout = timeout
     
     def __enter__(self):
+        logger.debug(f"🔒 Attempting to acquire database lock (timeout: {self.timeout}s)")
         acquired = self._lock.acquire(timeout=self.timeout)
         if not acquired:
+            health_stats["lock_timeouts"] += 1
+            logger.error(f"🔥 LOCK TIMEOUT: Could not acquire database lock within {self.timeout} seconds")
             raise TimeoutError(f"Could not acquire database lock within {self.timeout} seconds")
+        logger.debug("🔓 Database lock acquired successfully")
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
+        logger.debug("🔓 Releasing database lock")
         self._lock.release()
     
     def acquire(self, timeout=None):
@@ -1062,12 +1169,33 @@ def load_csv_files():
         import traceback
         traceback.print_exc()
 
+def health_monitor_thread():
+    """Background thread to monitor system health and log diagnostics"""
+    logger.info("💊 Health monitor thread started")
+    last_health_log = 0
+    HEALTH_LOG_INTERVAL = 300  # Log health every 5 minutes
+    
+    while True:
+        try:
+            time.sleep(30)  # Check every 30 seconds
+            
+            current_time = time.time()
+            if current_time - last_health_log >= HEALTH_LOG_INTERVAL:
+                log_system_health()
+                last_health_log = current_time
+                
+        except Exception as e:
+            logger.error(f"❌ Health monitor error: {e}")
+            time.sleep(60)  # Wait longer on error
+
 def periodic_reload():
     """Periodically check for updates in the active CSV file or new files"""
     consecutive_errors = 0
     max_consecutive_errors = 5
     last_heartbeat_refresh = 0
     HEARTBEAT_INTERVAL = 60  # Force refresh every 60 seconds
+    
+    logger.info("🔄 Periodic reload thread started")
     
     while True:
         try:
@@ -1219,6 +1347,11 @@ async def startup_event():
     reload_thread = threading.Thread(target=periodic_reload, daemon=True)
     reload_thread.start()
     logger.info("🔄 Started periodic reload thread with memory safety")
+    
+    # Start health monitoring thread
+    health_thread = threading.Thread(target=health_monitor_thread, daemon=True)
+    health_thread.start()
+    logger.info("💊 Started health monitoring thread")
     
     # Create reporters table first to ensure API endpoints work
     logger.info("🏗️  Creating reporters table schema...")
@@ -1452,6 +1585,11 @@ async def get_data(
         # Use thread-safe database access
         with db_lock:
             try:
+                # Log memory before expensive database operation
+                process = psutil.Process()
+                pre_query_memory = process.memory_info().rss / 1024 / 1024
+                logger.debug(f"🔍 Pre-query memory: {pre_query_memory:.1f} MB")
+                
                 # First check if we have any data at all
                 total_in_db_result = conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()
                 total_in_db = safe_get(total_in_db_result)
@@ -1503,6 +1641,10 @@ async def get_data(
                 
                 # Clean up
                 conn.execute("DROP TABLE IF EXISTS temp_filtered")
+                
+                # Log memory after main query
+                post_query_memory = process.memory_info().rss / 1024 / 1024
+                logger.debug(f"🔍 Post-query memory: {post_query_memory:.1f} MB (Δ{post_query_memory-pre_query_memory:+.1f} MB)")
                 
                 # Convert to list of dicts with proper field mapping
                 data = []
@@ -3268,6 +3410,96 @@ async def get_reporter_fetcher_status():
 
 # Duplicate force_refresh function removed - using the one defined earlier
 
+@dashboard_app.get("/api/health-status")
+async def get_health_status():
+    """Get detailed health status of the dashboard application"""
+    try:
+        current_time = time.time()
+        uptime_hours = (current_time - health_stats["startup_time"]) / 3600
+        time_since_last_request = current_time - health_stats["last_request_time"]
+        
+        # Get system metrics
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        
+        system_memory = psutil.virtual_memory()
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        
+        # Test database connectivity
+        db_healthy = False
+        db_error = None
+        try:
+            with db_lock.acquire(timeout=5):
+                conn.execute("SELECT COUNT(*) FROM layer_data").fetchone()
+                db_healthy = True
+        except Exception as e:
+            db_error = str(e)
+        
+        # Get total rows safely
+        total_rows = 0
+        try:
+            with db_lock.acquire(timeout=2):
+                total_rows = safe_get(conn.execute("SELECT COUNT(*) FROM layer_data").fetchone())
+        except:
+            pass
+        
+        health_status = {
+            "status": "healthy" if db_healthy and memory_mb < 12000 else "degraded" if db_healthy else "unhealthy",
+            "timestamp": datetime.datetime.fromtimestamp(current_time).isoformat(),
+            "uptime_hours": round(uptime_hours, 2),
+            "system": {
+                "process_memory_mb": round(memory_mb, 1),
+                "system_memory_percent": system_memory.percent,
+                "available_memory_gb": round(system_memory.available / (1024**3), 1),
+                "cpu_percent": cpu_percent
+            },
+            "database": {
+                "healthy": db_healthy,
+                "total_rows": total_rows,
+                "error": db_error
+            },
+            "application": {
+                "total_requests": health_stats["request_count"],
+                "slow_requests": health_stats["slow_requests"],
+                "database_errors": health_stats["database_errors"],
+                "memory_warnings": health_stats["memory_warnings"],
+                "lock_timeouts": health_stats["lock_timeouts"],
+                "time_since_last_request": round(time_since_last_request, 1),
+                "last_health_check": datetime.datetime.fromtimestamp(health_stats["last_health_check"]).isoformat()
+            },
+            "instance": {
+                "name": INSTANCE_NAME,
+                "mount_path": MOUNT_PATH,
+                "source_directory": SOURCE_DIR
+            }
+        }
+        
+        # Add warnings for potential issues
+        warnings = []
+        if memory_mb > 10000:
+            warnings.append(f"High memory usage: {memory_mb:.1f} MB")
+        if system_memory.percent > 90:
+            warnings.append(f"High system memory usage: {system_memory.percent:.1f}%")
+        if cpu_percent > 80:
+            warnings.append(f"High CPU usage: {cpu_percent:.1f}%")
+        if time_since_last_request > 300:
+            warnings.append(f"No recent requests: {time_since_last_request:.1f}s")
+        if health_stats["lock_timeouts"] > 0:
+            warnings.append(f"Database lock timeouts: {health_stats['lock_timeouts']}")
+        
+        health_status["warnings"] = warnings
+        
+        return health_status
+        
+    except Exception as e:
+        logger.error(f"❌ Health status check failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+
 @dashboard_app.post("/api/trigger-historical-maximal-power")
 async def trigger_historical_maximal_power():
     """Manually trigger historical maximal power data collection"""
@@ -3347,8 +3579,9 @@ logger.info(f"📊 Dashboard mounted at: {MOUNT_PATH}")
 
 # Add after existing middleware
 @app.middleware("http")
-async def cellular_optimization_middleware(request: Request, call_next):
+async def monitoring_middleware(request: Request, call_next):
     start_time = time.time()
+    request_id = f"{int(start_time * 1000)}-{hash(request.url.path) % 1000:03d}"
     
     # Enhanced mobile/cellular detection
     user_agent = request.headers.get("user-agent", "")
@@ -3364,11 +3597,38 @@ async def cellular_optimization_middleware(request: Request, call_next):
     connection_type = request.headers.get("connection-type", "").lower()
     is_cellular = is_cellular or connection_type in ["cellular", "4g", "5g", "3g"]
     
-    logger.info(f"📱 {'CELLULAR' if is_cellular else 'MOBILE' if is_mobile else 'DESKTOP'} Request: {request.method} {request.url.path} - UA: {user_agent[:50]}...")
+    # Update health stats
+    health_stats["request_count"] += 1
+    health_stats["last_request_time"] = start_time
+    
+    # Log memory before processing API requests
+    if request.url.path.startswith("/dashboard-") and "/api/" in request.url.path:
+        try:
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            logger.info(f"🔍 [{request_id}] PRE-API Memory: {memory_mb:.1f} MB - {request.method} {request.url.path}")
+        except:
+            pass
+    
+    logger.info(f"📱 [{request_id}] {'CELLULAR' if is_cellular else 'MOBILE' if is_mobile else 'DESKTOP'} Request: {request.method} {request.url.path}")
     
     try:
         response = await call_next(request)
         process_time = time.time() - start_time
+        
+        # Track slow requests
+        if process_time > 5.0:  # Requests taking more than 5 seconds
+            health_stats["slow_requests"] += 1
+            logger.warning(f"🐌 [{request_id}] SLOW REQUEST: {process_time:.3f}s - {request.method} {request.url.path}")
+            
+            # Log detailed memory state for slow requests
+            try:
+                process = psutil.Process()
+                memory_mb = process.memory_info().rss / 1024 / 1024
+                system_memory = psutil.virtual_memory()
+                logger.warning(f"🐌 [{request_id}] SLOW REQUEST Memory: Process={memory_mb:.1f}MB, System={system_memory.percent:.1f}% used")
+            except:
+                pass
         
         # Add cellular-optimized headers
         if is_cellular:
@@ -3379,12 +3639,39 @@ async def cellular_optimization_middleware(request: Request, call_next):
             response.headers["Cache-Control"] = "public, max-age=120"
             response.headers["X-Mobile-Optimized"] = "true"
         
-        logger.info(f"✅ Response: {response.status_code} - Time: {process_time:.3f}s - Cellular: {is_cellular}")
+        # Add debug headers
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Process-Time"] = f"{process_time:.3f}s"
+        
+        status_emoji = "✅" if response.status_code < 400 else "❌"
+        logger.info(f"{status_emoji} [{request_id}] Response: {response.status_code} - Time: {process_time:.3f}s")
+        
+        # Log memory after processing API requests
+        if request.url.path.startswith("/dashboard-") and "/api/" in request.url.path:
+            try:
+                process = psutil.Process()
+                memory_mb = process.memory_info().rss / 1024 / 1024
+                logger.info(f"🔍 [{request_id}] POST-API Memory: {memory_mb:.1f} MB")
+            except:
+                pass
+        
         return response
         
     except Exception as e:
         process_time = time.time() - start_time
-        logger.error(f"❌ Request failed: {request.method} {request.url.path} - Error: {str(e)} - Time: {process_time:.3f}s - Cellular: {is_cellular}")
+        health_stats["database_errors"] += 1
+        logger.error(f"❌ [{request_id}] Request failed: {request.method} {request.url.path} - Error: {str(e)} - Time: {process_time:.3f}s")
+        
+        # Log memory state on errors
+        try:
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            logger.error(f"❌ [{request_id}] ERROR Memory: {memory_mb:.1f} MB")
+        except:
+            pass
+        
+        import traceback
+        logger.error(f"❌ [{request_id}] Traceback:\n{traceback.format_exc()}")
         raise
 
 if __name__ == "__main__":
