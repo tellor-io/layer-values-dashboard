@@ -483,30 +483,69 @@ def load_historical_table(table_info):
                 
                 # Load data directly with proper error handling and column mapping
                 # Note: POWER_OF_AGGR will be calculated after loading, not from CSV
-                conn.execute(f"""
-                    INSERT OR IGNORE INTO layer_data 
-                    SELECT 
-                        {map_column('REPORTER')} as REPORTER,
-                        {map_column('QUERY_TYPE')} as QUERY_TYPE,
-                        {map_column('QUERY_ID')} as QUERY_ID,
-                        {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
-                        {map_column('CYCLELIST')} as CYCLELIST,
-                        {map_column('POWER')} as POWER,
-                        {map_column('TIMESTAMP')} as TIMESTAMP,
-                        {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
-                        {map_column('TX_HASH')} as TX_HASH,
-                        {map_column('CURRENT_TIME')} as CURRENT_TIME,
-                        {map_column('TIME_DIFF')} as TIME_DIFF,
-                        {map_column('VALUE')} as VALUE,
-                        {map_column('DISPUTABLE')} as DISPUTABLE,
-                        '{table_info['filename']}' as source_file,
-                        NULL as POWER_OF_AGGR
-                    FROM read_csv_auto('{table_info['path']}', 
-                        header=true,
-                        sample_size=10000,
-                        ignore_errors=true
-                    )
-                """)
+                # Check if CSV has headers by examining first line
+                has_headers = False
+                try:
+                    with open(table_info['path'], 'r') as f:
+                        first_line = f.readline().strip()
+                        # If first line starts with 'tellor' it's data, not headers
+                        has_headers = not first_line.startswith('tellor')
+                except:
+                    has_headers = True  # Default to assuming headers
+                
+                if has_headers:
+                    # Use original column mapping approach
+                    conn.execute(f"""
+                        INSERT OR IGNORE INTO layer_data 
+                        SELECT 
+                            {map_column('REPORTER')} as REPORTER,
+                            {map_column('QUERY_TYPE')} as QUERY_TYPE,
+                            {map_column('QUERY_ID')} as QUERY_ID,
+                            {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
+                            {map_column('CYCLELIST')} as CYCLELIST,
+                            {map_column('POWER')} as POWER,
+                            {map_column('TIMESTAMP')} as TIMESTAMP,
+                            {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
+                            {map_column('TX_HASH')} as TX_HASH,
+                            {map_column('CURRENT_TIME')} as CURRENT_TIME,
+                            {map_column('TIME_DIFF')} as TIME_DIFF,
+                            {map_column('VALUE')} as VALUE,
+                            {map_column('DISPUTABLE')} as DISPUTABLE,
+                            '{table_info['filename']}' as source_file,
+                            NULL as POWER_OF_AGGR
+                        FROM read_csv_auto('{table_info['path']}', 
+                            header=true,
+                            sample_size=10000,
+                            ignore_errors=true
+                        )
+                    """)
+                else:
+                    # Use positional column mapping for headerless CSV
+                    logger.info(f"📄 Detected headerless CSV format for {table_info['filename']}")
+                    conn.execute(f"""
+                        INSERT OR IGNORE INTO layer_data 
+                        SELECT 
+                            column00 as REPORTER,
+                            column01 as QUERY_TYPE,
+                            column02 as QUERY_ID,
+                            column03 as AGGREGATE_METHOD,
+                            TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
+                            TRY_CAST(column05 AS INTEGER) as POWER,
+                            TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
+                            TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                            column08 as TX_HASH,
+                            TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
+                            TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
+                            TRY_CAST(column11 AS DOUBLE) as VALUE,
+                            TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
+                            '{table_info['filename']}' as source_file,
+                            NULL as POWER_OF_AGGR
+                        FROM read_csv_auto('{table_info['path']}', 
+                            header=false,
+                            sample_size=10000,
+                            ignore_errors=true
+                        )
+                    """)
                 
                 # Get the count of rows actually inserted
                 total_rows = safe_get(conn.execute("""
@@ -524,31 +563,58 @@ def load_historical_table(table_info):
                 # Try a more permissive approach
                 try:
                     logger.info("🔄 Trying fallback approach with all_varchar...")
-                    conn.execute(f"""
-                        INSERT OR IGNORE INTO layer_data 
-                        SELECT 
-                            CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
-                            CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
-                            CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
-                            CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
-                            TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
-                            TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
-                            TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
-                            TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
-                            CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
-                            TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
-                            TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
-                            TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
-                            TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
-                            '{table_info['filename']}' as source_file,
-                            NULL as POWER_OF_AGGR
-                        FROM read_csv_auto('{table_info['path']}', 
-                            header=true,
-                            all_varchar=true,
-                            sample_size=10000,
-                            ignore_errors=true
-                        )
-                    """)
+                    if has_headers:
+                        conn.execute(f"""
+                            INSERT OR IGNORE INTO layer_data 
+                            SELECT 
+                                CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
+                                CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
+                                CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
+                                CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
+                                TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
+                                TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
+                                TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
+                                TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
+                                CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
+                                TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
+                                TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
+                                TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
+                                TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
+                                '{table_info['filename']}' as source_file,
+                                NULL as POWER_OF_AGGR
+                            FROM read_csv_auto('{table_info['path']}', 
+                                header=true,
+                                all_varchar=true,
+                                sample_size=10000,
+                                ignore_errors=true
+                            )
+                        """)
+                    else:
+                        conn.execute(f"""
+                            INSERT OR IGNORE INTO layer_data 
+                            SELECT 
+                                CAST(column00 AS VARCHAR) as REPORTER,
+                                CAST(column01 AS VARCHAR) as QUERY_TYPE,
+                                CAST(column02 AS VARCHAR) as QUERY_ID,
+                                CAST(column03 AS VARCHAR) as AGGREGATE_METHOD,
+                                TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
+                                TRY_CAST(column05 AS INTEGER) as POWER,
+                                TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
+                                TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                                CAST(column08 AS VARCHAR) as TX_HASH,
+                                TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
+                                TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
+                                TRY_CAST(column11 AS DOUBLE) as VALUE,
+                                TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
+                                '{table_info['filename']}' as source_file,
+                                NULL as POWER_OF_AGGR
+                            FROM read_csv_auto('{table_info['path']}', 
+                                header=false,
+                                all_varchar=true,
+                                sample_size=10000,
+                                ignore_errors=true
+                            )
+                        """)
                     
                     total_rows = safe_get(conn.execute("""
                         SELECT COUNT(*) FROM layer_data WHERE source_file = ?
@@ -704,31 +770,70 @@ def load_active_table(table_info, is_reload=False):
                         return 'NULL'
                     
                     logger.info("📥 Loading CSV data into database...")
-                    # Load data directly with proper error handling and column mapping
-                    conn.execute(f"""
-                        INSERT OR IGNORE INTO layer_data 
-                        SELECT 
-                            {map_column('REPORTER')} as REPORTER,
-                            {map_column('QUERY_TYPE')} as QUERY_TYPE,
-                            {map_column('QUERY_ID')} as QUERY_ID,
-                            {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
-                            {map_column('CYCLELIST')} as CYCLELIST,
-                            {map_column('POWER')} as POWER,
-                            {map_column('TIMESTAMP')} as TIMESTAMP,
-                            {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
-                            {map_column('TX_HASH')} as TX_HASH,
-                            {map_column('CURRENT_TIME')} as CURRENT_TIME,
-                            {map_column('TIME_DIFF')} as TIME_DIFF,
-                            {map_column('VALUE')} as VALUE,
-                            {map_column('DISPUTABLE')} as DISPUTABLE,
-                            '{table_info['filename']}' as source_file,
-                            NULL as POWER_OF_AGGR
-                        FROM read_csv_auto('{table_info['path']}', 
-                            header=true,
-                            sample_size=10000,
-                            ignore_errors=true
-                        )
-                    """)
+                    
+                    # Check if CSV has headers by examining first line
+                    has_headers = False
+                    try:
+                        with open(table_info['path'], 'r') as f:
+                            first_line = f.readline().strip()
+                            # If first line starts with 'tellor' it's data, not headers
+                            has_headers = not first_line.startswith('tellor')
+                    except:
+                        has_headers = True  # Default to assuming headers
+                    
+                    if has_headers:
+                        # Use original column mapping approach
+                        conn.execute(f"""
+                            INSERT OR IGNORE INTO layer_data 
+                            SELECT 
+                                {map_column('REPORTER')} as REPORTER,
+                                {map_column('QUERY_TYPE')} as QUERY_TYPE,
+                                {map_column('QUERY_ID')} as QUERY_ID,
+                                {map_column('AGGREGATE_METHOD')} as AGGREGATE_METHOD,
+                                {map_column('CYCLELIST')} as CYCLELIST,
+                                {map_column('POWER')} as POWER,
+                                {map_column('TIMESTAMP')} as TIMESTAMP,
+                                {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
+                                {map_column('TX_HASH')} as TX_HASH,
+                                {map_column('CURRENT_TIME')} as CURRENT_TIME,
+                                {map_column('TIME_DIFF')} as TIME_DIFF,
+                                {map_column('VALUE')} as VALUE,
+                                {map_column('DISPUTABLE')} as DISPUTABLE,
+                                '{table_info['filename']}' as source_file,
+                                NULL as POWER_OF_AGGR
+                            FROM read_csv_auto('{table_info['path']}', 
+                                header=true,
+                                sample_size=10000,
+                                ignore_errors=true
+                            )
+                        """)
+                    else:
+                        # Use positional column mapping for headerless CSV
+                        logger.info(f"📄 Detected headerless CSV format for {table_info['filename']}")
+                        conn.execute(f"""
+                            INSERT OR IGNORE INTO layer_data 
+                            SELECT 
+                                column00 as REPORTER,
+                                column01 as QUERY_TYPE,
+                                column02 as QUERY_ID,
+                                column03 as AGGREGATE_METHOD,
+                                TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
+                                TRY_CAST(column05 AS INTEGER) as POWER,
+                                TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
+                                TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                                column08 as TX_HASH,
+                                TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
+                                TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
+                                TRY_CAST(column11 AS DOUBLE) as VALUE,
+                                TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
+                                '{table_info['filename']}' as source_file,
+                                NULL as POWER_OF_AGGR
+                            FROM read_csv_auto('{table_info['path']}', 
+                                header=false,
+                                sample_size=10000,
+                                ignore_errors=true
+                            )
+                        """)
                     
                     # Get the count of rows actually inserted
                     total_rows = safe_get(conn.execute("""
@@ -759,31 +864,58 @@ def load_active_table(table_info, is_reload=False):
                     # Try a more permissive approach
                     try:
                         logger.info("🔄 Trying fallback approach with all_varchar...")
-                        conn.execute(f"""
-                            INSERT OR IGNORE INTO layer_data 
-                            SELECT 
-                                CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
-                                CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
-                                CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
-                                CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
-                                TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
-                                TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
-                                TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
-                                TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
-                                CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
-                                TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
-                                TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
-                                TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
-                                TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
-                                '{table_info['filename']}' as source_file,
-                                NULL as POWER_OF_AGGR
-                            FROM read_csv_auto('{table_info['path']}', 
-                                header=true,
-                                all_varchar=true,
-                                sample_size=10000,
-                                ignore_errors=true
-                            )
-                        """)
+                        if has_headers:
+                            conn.execute(f"""
+                                INSERT OR IGNORE INTO layer_data 
+                                SELECT 
+                                    CAST({map_column('REPORTER')} AS VARCHAR) as REPORTER,
+                                    CAST({map_column('QUERY_TYPE')} AS VARCHAR) as QUERY_TYPE,
+                                    CAST({map_column('QUERY_ID')} AS VARCHAR) as QUERY_ID,
+                                    CAST({map_column('AGGREGATE_METHOD')} AS VARCHAR) as AGGREGATE_METHOD,
+                                    TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
+                                    TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
+                                    TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
+                                    TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
+                                    CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
+                                    TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
+                                    TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
+                                    TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
+                                    TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
+                                    '{table_info['filename']}' as source_file,
+                                    NULL as POWER_OF_AGGR
+                                FROM read_csv_auto('{table_info['path']}', 
+                                    header=true,
+                                    all_varchar=true,
+                                    sample_size=10000,
+                                    ignore_errors=true
+                                )
+                            """)
+                        else:
+                            conn.execute(f"""
+                                INSERT OR IGNORE INTO layer_data 
+                                SELECT 
+                                    CAST(column00 AS VARCHAR) as REPORTER,
+                                    CAST(column01 AS VARCHAR) as QUERY_TYPE,
+                                    CAST(column02 AS VARCHAR) as QUERY_ID,
+                                    CAST(column03 AS VARCHAR) as AGGREGATE_METHOD,
+                                    TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
+                                    TRY_CAST(column05 AS INTEGER) as POWER,
+                                    TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
+                                    TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                                    CAST(column08 AS VARCHAR) as TX_HASH,
+                                    TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
+                                    TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
+                                    TRY_CAST(column11 AS DOUBLE) as VALUE,
+                                    TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
+                                    '{table_info['filename']}' as source_file,
+                                    NULL as POWER_OF_AGGR
+                                FROM read_csv_auto('{table_info['path']}', 
+                                    header=false,
+                                    all_varchar=true,
+                                    sample_size=10000,
+                                    ignore_errors=true
+                                )
+                            """)
                         
                         total_rows = safe_get(conn.execute("""
                             SELECT COUNT(*) FROM layer_data WHERE source_file = ?
@@ -889,9 +1021,19 @@ def load_active_table_incremental(table_info, size_change):
         # Read only the new rows by skipping existing ones
         try:
             with db_lock:
+                # Check if CSV has headers by examining first line
+                has_headers_for_count = False
+                try:
+                    with open(table_info['path'], 'r') as f:
+                        first_line = f.readline().strip()
+                        # If first line starts with 'tellor' it's data, not headers
+                        has_headers_for_count = not first_line.startswith('tellor')
+                except:
+                    has_headers_for_count = True  # Default to assuming headers
+                
                 # Get total rows in CSV file
                 total_csv_rows = safe_get(conn.execute(f"""
-                    SELECT COUNT(*) FROM read_csv_auto('{table_info['path']}', sample_size=1000)
+                    SELECT COUNT(*) FROM read_csv_auto('{table_info['path']}', header={str(has_headers_for_count).lower()}, sample_size=1000)
                 """).fetchone())
                 
                 if total_csv_rows <= current_rows:
@@ -903,30 +1045,66 @@ def load_active_table_incremental(table_info, size_change):
                 new_rows = total_csv_rows - current_rows
                 logger.info(f"📥 Loading {new_rows} new rows (CSV: {total_csv_rows}, DB: {current_rows})")
                 
+                # Check if CSV has headers by examining first line
+                has_headers = False
+                try:
+                    with open(table_info['path'], 'r') as f:
+                        first_line = f.readline().strip()
+                        # If first line starts with 'tellor' it's data, not headers
+                        has_headers = not first_line.startswith('tellor')
+                except:
+                    has_headers = True  # Default to assuming headers
+                
                 # Load only the new rows using OFFSET
-                conn.execute(f"""
-                    INSERT OR IGNORE INTO layer_data 
-                    SELECT 
-                        REPORTER,
-                        QUERY_TYPE,
-                        QUERY_ID,
-                        AGGREGATE_METHOD,
-                        CYCLELIST,
-                        POWER,
-                        TIMESTAMP,
-                        TRUSTED_VALUE,
-                        TX_HASH,
-                        CURRENT_TIME,
-                        TIME_DIFF,
-                        VALUE,
-                        DISPUTABLE,
-                        '{table_info['filename']}' as source_file,
-                        NULL as POWER_OF_AGGR
-                    FROM (
-                        SELECT *, ROW_NUMBER() OVER () as rn
-                        FROM read_csv_auto('{table_info['path']}', header=true, ignore_errors=true)
-                    ) WHERE rn > {current_rows}
-                """)
+                if has_headers:
+                    conn.execute(f"""
+                        INSERT OR IGNORE INTO layer_data 
+                        SELECT 
+                            REPORTER,
+                            QUERY_TYPE,
+                            QUERY_ID,
+                            AGGREGATE_METHOD,
+                            CYCLELIST,
+                            POWER,
+                            TIMESTAMP,
+                            TRUSTED_VALUE,
+                            TX_HASH,
+                            CURRENT_TIME,
+                            TIME_DIFF,
+                            VALUE,
+                            DISPUTABLE,
+                            '{table_info['filename']}' as source_file,
+                            NULL as POWER_OF_AGGR
+                        FROM (
+                            SELECT *, ROW_NUMBER() OVER () as rn
+                            FROM read_csv_auto('{table_info['path']}', header=true, ignore_errors=true)
+                        ) WHERE rn > {current_rows}
+                    """)
+                else:
+                    logger.info(f"📄 Detected headerless CSV format for incremental load: {table_info['filename']}")
+                    conn.execute(f"""
+                        INSERT OR IGNORE INTO layer_data 
+                        SELECT 
+                            column00 as REPORTER,
+                            column01 as QUERY_TYPE,
+                            column02 as QUERY_ID,
+                            column03 as AGGREGATE_METHOD,
+                            TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
+                            TRY_CAST(column05 AS INTEGER) as POWER,
+                            TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
+                            TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                            column08 as TX_HASH,
+                            TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
+                            TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
+                            TRY_CAST(column11 AS DOUBLE) as VALUE,
+                            TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
+                            '{table_info['filename']}' as source_file,
+                            NULL as POWER_OF_AGGR
+                        FROM (
+                            SELECT *, ROW_NUMBER() OVER () as rn
+                            FROM read_csv_auto('{table_info['path']}', header=false, ignore_errors=true)
+                        ) WHERE rn > {current_rows}
+                    """)
                 
                 # Verify new rows were added
                 final_rows = safe_get(conn.execute("""
@@ -1793,7 +1971,7 @@ async def get_stats(request: Request):
 @dashboard_app.get("/api/analytics")
 async def get_analytics(
     request: Request,
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+    timeframe: str = Query(..., regex="^(24h|30d)$")
 ):
     """Get analytics data with cellular optimization"""
     try:
@@ -1810,9 +1988,6 @@ async def get_analytics(
             if timeframe == "24h":
                 interval_ms = 2 * 60 * 60 * 1000  # 2 hours instead of 4
                 num_buckets = 12
-            elif timeframe == "7d":
-                interval_ms = 12 * 60 * 60 * 1000  # 12 hours
-                num_buckets = 14
             elif timeframe == "30d":
                 interval_ms = 5 * 24 * 60 * 60 * 1000  # 5 days instead of 10
                 num_buckets = 6
@@ -1821,9 +1996,6 @@ async def get_analytics(
             if timeframe == "24h":
                 interval_ms = 1 * 60 * 60 * 1000  # 1 hour
                 num_buckets = 24
-            elif timeframe == "7d":
-                interval_ms = 12 * 60 * 60 * 1000  # 12 hours
-                num_buckets = 14
             elif timeframe == "30d":
                 interval_ms = 2 * 24 * 60 * 60 * 1000  # 2 days
                 num_buckets = 15
@@ -1832,9 +2004,6 @@ async def get_analytics(
             if timeframe == "24h":
                 interval_ms = 30 * 60 * 1000  # 30 minutes
                 num_buckets = 48
-            elif timeframe == "7d":
-                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
-                num_buckets = 28
             elif timeframe == "30d":
                 interval_ms = 24 * 60 * 60 * 1000  # 1 day
                 num_buckets = 30
@@ -2073,7 +2242,7 @@ async def search_data(
 
 @dashboard_app.get("/api/query-analytics")
 async def get_query_analytics(
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+    timeframe: str = Query(..., regex="^(24h|30d)$")
 ):
     """Get analytics data by query ID for different timeframes"""
     try:
@@ -2094,14 +2263,6 @@ async def get_query_analytics(
                 interval_ms = 30 * 60 * 1000  # 30 minutes
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
-                
-            elif timeframe == "7d":
-                logger.info("📅 Processing 7d query analytics...")
-                # 6-hour intervals over past 7 days
-                days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
-                num_buckets = 28
-                start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d query analytics...")
@@ -2190,8 +2351,6 @@ async def get_query_analytics(
                 
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
-                elif timeframe == "7d":
-                    time_labels.append(dt.strftime('%m/%d'))
                 elif timeframe == "30d":
                     time_labels.append(dt.strftime('%m/%d'))
             
@@ -2221,7 +2380,7 @@ async def get_query_analytics(
 
 @dashboard_app.get("/api/reporter-analytics")
 async def get_reporter_analytics(
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+    timeframe: str = Query(..., regex="^(24h|30d)$")
 ):
     """Get analytics data by reporter for different timeframes"""
     try:
@@ -2242,14 +2401,6 @@ async def get_reporter_analytics(
                 interval_ms = 30 * 60 * 1000  # 30 minutes
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
-                
-            elif timeframe == "7d":
-                logger.info("📅 Processing 7d reporter analytics...")
-                # 6-hour intervals over past 7 days
-                days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
-                num_buckets = 28
-                start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d reporter analytics...")
@@ -2338,8 +2489,6 @@ async def get_reporter_analytics(
                 
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
-                elif timeframe == "7d":
-                    time_labels.append(dt.strftime('%m/%d'))
                 elif timeframe == "30d":
                     time_labels.append(dt.strftime('%m/%d'))
             
@@ -2630,7 +2779,7 @@ async def get_reporter_power_analytics(
 
 @dashboard_app.get("/api/agreement-analytics")
 async def get_agreement_analytics(
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+    timeframe: str = Query(..., regex="^(24h|30d)$")
 ):
     """Get agreement analytics showing deviation from trusted values by query ID"""
     try:
@@ -2651,14 +2800,6 @@ async def get_agreement_analytics(
                 interval_ms = 30 * 60 * 1000  # 30 minutes
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
-                
-            elif timeframe == "7d":
-                logger.info("📅 Processing 7d agreement analytics...")
-                # 6-hour intervals over past 7 days
-                days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
-                num_buckets = 28
-                start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d agreement analytics...")
@@ -2748,8 +2889,6 @@ async def get_agreement_analytics(
                 
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
-                elif timeframe == "7d":
-                    time_labels.append(dt.strftime('%m/%d'))
                 elif timeframe == "30d":
                     time_labels.append(dt.strftime('%m/%d'))
             
@@ -2955,7 +3094,7 @@ async def get_reporter_detail(address: str):
 @dashboard_app.get("/api/reporters-activity-analytics")
 async def get_reporters_activity_analytics(
     request: Request,
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+    timeframe: str = Query(..., regex="^(24h|30d)$")
 ):
     """Get total reports by active reporters analytics data for different timeframes"""
     try:
@@ -2979,14 +3118,6 @@ async def get_reporters_activity_analytics(
                 interval_ms = 30 * 60 * 1000  # 30 minutes
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
-                
-            elif timeframe == "7d":
-                logger.info("📅 Processing 7d reporter activity analytics...")
-                # 6-hour intervals over past 7 days
-                days_7_ms = 7 * 24 * 60 * 60 * 1000
-                interval_ms = 6 * 60 * 60 * 1000  # 6 hours
-                num_buckets = 28
-                start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d reporter activity analytics...")
@@ -3086,8 +3217,6 @@ async def get_reporters_activity_analytics(
                 dt = pd.to_datetime(bucket_start, unit='ms')
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
-                elif timeframe == "7d":
-                    time_labels.append(dt.strftime('%m/%d'))
                 elif timeframe == "30d":
                     time_labels.append(dt.strftime('%m/%d'))
             
