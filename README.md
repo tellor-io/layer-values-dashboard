@@ -28,7 +28,7 @@ uv venv && source .venv/bin/activate
 uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-values-monitor/logs/ --port 8001
 ```
 
-4. **Open your browser** and go to: `http://localhost:8001/dashboard-palmito/` (or your custom port)
+4. **Open your browser** and go to: `http://localhost:8001/dashboard-palmito/` (or your custom port and mount path)
 
 ## Usage
 
@@ -40,13 +40,15 @@ uv run python start_dashboard.py --source-dir /home/<username>/path/to/layer-val
 
 ### API Endpoints
 
-The backend provides RESTful API endpoints under `/dashboard-palmito/api/`:
+The backend provides RESTful API endpoints under `{MOUNT_PATH}/api/` (default: `/dashboard-palmito/api/`):
 
-- `GET /dashboard-palmito/api/info` - Data source information
-- `GET /dashboard-palmito/api/stats` - Statistical overview
-- `GET /dashboard-palmito/api/data` - Paginated data with filtering
-- `GET /dashboard-palmito/api/search` - Full-text search
-- `GET /dashboard-palmito/api/analytics` - Analytics data for different timeframes
+- `GET {MOUNT_PATH}/api/info` - Data source information
+- `GET {MOUNT_PATH}/api/stats` - Statistical overview
+- `GET {MOUNT_PATH}/api/data` - Paginated data with filtering
+- `GET {MOUNT_PATH}/api/search` - Full-text search
+- `GET {MOUNT_PATH}/api/analytics` - Analytics data for different timeframes
+
+Note: `{MOUNT_PATH}` can be configured via the `MOUNT_PATH` environment variable or `--mount-path` command line argument.
 
 Visit `http://localhost:8001/docs` for interactive API documentation.
 

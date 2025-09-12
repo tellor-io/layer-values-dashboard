@@ -57,7 +57,7 @@ let isLoading = false;
 
 // Configuration
 const RECORDS_PER_PAGE = 100;
-let API_BASE = '/dashboard-palmito'; // Default, will be updated from backend config
+let API_BASE = ''; // Will be set to MOUNT_PATH from backend config
 
 // DOM elements
 const elements = {
@@ -162,18 +162,23 @@ const hideLoading = () => {
 // Initialize configuration from backend
 const initializeConfig = async () => {
     try {
-        // Use the default API_BASE to fetch configuration
-        const url = new URL(`${API_BASE}/api/info`, window.location.origin);
-        const response = await fetch(url);
-        if (response.ok) {
-            const info = await response.json();
-            if (info.mount_path) {
-                API_BASE = info.mount_path;
-                console.log(`📊 Search API_BASE updated to: ${API_BASE}`);
-            }
+        const configUrl = new URL('/api/info', window.location.origin);
+        const response = await fetch(configUrl);
+        
+        if (!response.ok) {
+            throw new Error(`Failed to fetch configuration: HTTP ${response.status}`);
         }
+        
+        const info = await response.json();
+        if (!info.mount_path) {
+            throw new Error('Configuration missing mount_path - check MOUNT_PATH environment variable');
+        }
+        
+        API_BASE = info.mount_path;
+        console.log(`📊 Search API_BASE set to: ${API_BASE}`);
     } catch (error) {
-        console.warn('Failed to load configuration, using default API_BASE:', error);
+        console.error('❌ Configuration Error:', error);
+        throw new Error(`Failed to initialize configuration: ${error.message}`);
     }
 };
 

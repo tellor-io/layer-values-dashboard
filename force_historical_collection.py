@@ -7,6 +7,7 @@ Directly collects and stores historical maximal power data in the database
 import sys
 import time
 import logging
+import os
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -20,17 +21,19 @@ import requests
 
 def test_dashboard_connection():
     """Test if dashboard is accessible"""
+    mount_path = os.getenv('MOUNT_PATH')
     try:
-        response = requests.get("http://localhost:8001/dashboard-palmito/api/info", timeout=5)
+        response = requests.get(f"http://localhost:8001{mount_path}/api/info", timeout=5)
         return response.status_code == 200
     except:
         return False
 
 def test_maximal_power_api():
     """Test current API response"""
+    mount_path = os.getenv('MOUNT_PATH')
     print("\n🔍 Testing Current API Response...")
     try:
-        response = requests.get("http://localhost:8001/dashboard-palmito/api/reporters-activity-analytics?timeframe=24h", timeout=10)
+        response = requests.get(f"http://localhost:8001{mount_path}/api/reporters-activity-analytics?timeframe=24h", timeout=10)
         if response.status_code == 200:
             data = response.json()
             values = data['maximal_power_network']
@@ -46,10 +49,11 @@ def test_maximal_power_api():
 
 def force_collection_via_api():
     """Force collection using the dashboard API endpoint"""
+    mount_path = os.getenv('MOUNT_PATH')
     print("\n🔋 Forcing Historical Collection via API...")
     try:
         response = requests.post(
-            "http://localhost:8001/dashboard-palmito/api/trigger-historical-maximal-power",
+            f"http://localhost:8001{mount_path}/api/trigger-historical-maximal-power",
             headers={"Content-Type": "application/json"},
             timeout=120
         )
