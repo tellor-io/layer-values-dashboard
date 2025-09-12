@@ -45,9 +45,6 @@
                     <button class="analytics-btn active" data-timeframe="24h">
                         <i class="fas fa-clock"></i> 24h
                     </button>
-                    <button class="analytics-btn" data-timeframe="7d">
-                        <i class="fas fa-calendar-week"></i> 7d
-                    </button>
                     <button class="analytics-btn" data-timeframe="30d">
                         <i class="fas fa-calendar"></i> 30d
                     </button>
@@ -686,9 +683,29 @@
                     'full_array': data.representative_power_of_aggr.slice(0, 10)
                 });
                 
-                // Test: create a simple varying array to make sure Chart.js can handle it
-                const testArray = [7628, 7629, 7666, 7667, 7668, 7671, 7672];
-                console.log('📊 Test: Simple test array for comparison:', testArray);
+                // Calculate dynamic y1 axis range based on actual data
+                const powerData = [...data.representative_power_of_aggr];
+                const maximalPowerData = (data.has_maximal_power_data && data.maximal_power_network) ? data.maximal_power_network : [];
+                const allPowerData = [...powerData, ...maximalPowerData].filter(value => value != null && value > 0);
+                
+                let y1Min = undefined;
+                let y1Max = undefined;
+                
+                if (allPowerData.length > 0) {
+                    const dataMin = Math.min(...allPowerData);
+                    const dataMax = Math.max(...allPowerData);
+                    const range = dataMax - dataMin;
+                    const padding = range > 0 ? range * 0.1 : Math.abs(dataMin) * 0.1; // 10% padding
+                    
+                    y1Min = Math.max(0, dataMin - padding);
+                    y1Max = dataMax + padding;
+                    
+                    console.log('📊 Dynamic Y1 Axis Range:', {
+                        dataMin, dataMax, range, padding, y1Min, y1Max,
+                        powerDataSample: powerData.slice(0, 3),
+                        maximalPowerDataSample: maximalPowerData.slice(0, 3)
+                    });
+                }
 
                 // Prepare datasets array
                 const datasets = [
@@ -850,8 +867,9 @@
                                 type: 'linear',
                                 display: true,
                                 position: 'right',
-                                min: 7600,  // Set minimum closer to actual data range
-                                max: 7800,  // Set maximum closer to actual data range
+                                // Use dynamically calculated min/max values
+                                min: y1Min,
+                                max: y1Max,
                                 ticks: {
                                     color: '#a855f7',
                                     font: {
