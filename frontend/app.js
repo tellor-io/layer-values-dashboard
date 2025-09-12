@@ -9,6 +9,8 @@ let isQuestionableFilterActive = false; // Track questionable filter state
 // Enhanced cellular detection
 const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 const IS_CELLULAR = checkCellularConnection();
+const MOUNT_PATH = get env('MOUNT_PATH');
+const API_BASE = `${MOUNT_PATH}/api`;
 
 function checkCellularConnection() {
     // Check for cellular indicators
@@ -34,7 +36,7 @@ const MAX_RETRIES = IS_CELLULAR ? 1 : (IS_MOBILE ? 2 : 3);
 
 // Configuration with mobile detection
 const RECORDS_PER_PAGE = 100;
-let API_BASE = '/dashboard-palmito'; // Default, will be updated from backend config
+let API_BASE = ''; // Will be set to MOUNT_PATH from backend config
 
 // DOM elements
 const elements = {
@@ -322,18 +324,23 @@ const showCellularErrorMessage = (error) => {
 // Initialize configuration from backend
 const initializeConfig = async () => {
     try {
-        // Use the default API_BASE to fetch configuration
-        const url = new URL(`${API_BASE}/api/info`, window.location.origin);
-        const response = await fetch(url);
-        if (response.ok) {
-            const info = await response.json();
-            if (info.mount_path) {
-                API_BASE = info.mount_path;
-                console.log(`📊 API_BASE updated to: ${API_BASE}`);
-            }
+        const configUrl = new URL('/api/info', window.location.origin);
+        const response = await fetch(configUrl);
+        
+        if (!response.ok) {
+            throw new Error(`Failed to fetch configuration: HTTP ${response.status}`);
         }
+        
+        const info = await response.json();
+        if (!info.mount_path) {
+            throw new Error('Configuration missing mount_path - check MOUNT_PATH environment variable');
+        }
+        
+        API_BASE = info.mount_path;
+        console.log(`📊 API_BASE set to: ${API_BASE}`);
     } catch (error) {
-        console.warn('Failed to load configuration, using default API_BASE:', error);
+        console.error('❌ Configuration Error:', error);
+        throw new Error(`Failed to initialize configuration: ${error.message}`);
     }
 };
 

@@ -218,11 +218,12 @@ def main():
         
         print("🎉 All tests passed! The reporter fetcher integration is working correctly.")
         print(f"✅ Ready to process {len(reporters)} reporters from the example data.")
+        mount_path = os.getenv('MOUNT_PATH')
         print("\n📋 Next steps:")
         print("   1. Start the dashboard: python start_dashboard.py")
         print("   2. The reporter fetcher will automatically start fetching data every 60 seconds")
-        print("   3. Visit http://localhost:8001/dashboard-palmito/reporters to see the reporters page")
-        print("   4. Check http://localhost:8001/dashboard-palmito/api/reporter-fetcher-status for fetcher status")
+        print(f"   3. Visit http://localhost:8001{mount_path}/reporters to see the reporters page")
+        print(f"   4. Check http://localhost:8001{mount_path}/api/reporter-fetcher-status for fetcher status")
         
     except Exception as e:
         print(f"❌ Test failed: {e}")

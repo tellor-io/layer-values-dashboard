@@ -101,8 +101,8 @@ layer-values-dashboard/
 
 Once running, access your dashboards at:
 
-- **Palmito**: http://localhost:8001/dashboard-palmito/
-- **Mainnet**: http://localhost:8002/dashboard-mainnet/
+- **Palmito**: http://localhost:8001/dashboard-palmito/ (configurable via MOUNT_PATH)
+- **Mainnet**: http://localhost:8002/dashboard-mainnet/ (configurable via MOUNT_PATH)
 
 ## Data Isolation
 
@@ -228,10 +228,10 @@ tail -f backend/dashboard_mainnet.log
 ### Check Instance Status
 ```bash
 # Check Palmito instance
-curl http://localhost:8001/dashboard-palmito/api/info
+curl http://localhost:8001{MOUNT_PATH}/api/info
 
-# Check Mainnet instance
-curl http://localhost:8002/dashboard-mainnet/api/info
+# Check Mainnet instance  
+curl http://localhost:8002{MOUNT_PATH}/api/info
 ```
 
 ## Instance Information

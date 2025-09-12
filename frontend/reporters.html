@@ -312,7 +312,7 @@
                 this.reporterActivityChart = null;
                 this.currentTimeframe = '24h';
                 this.isLoadingAnalytics = false;
-                this.apiBase = '/dashboard-palmito'; // Default, will be updated
+                this.apiBase = ''; // Will be set to MOUNT_PATH from backend config
                 
                 // Add mobile-specific initialization
                 if (IS_MOBILE) {
@@ -327,18 +327,32 @@
             
             async initializeConfig() {
                 try {
-                    // Use the default apiBase to fetch configuration
-                    const url = new URL(`${this.apiBase}/api/info`, window.location.origin);
-                    const response = await fetch(url);
-                    if (response.ok) {
-                        const info = await response.json();
-                        if (info.mount_path) {
-                            this.apiBase = info.mount_path;
-                            console.log(`📊 Reporters API_BASE updated to: ${this.apiBase}`);
-                        }
+                    console.log('🔍 Debug: Attempting to fetch configuration from /api/info');
+                    const configUrl = new URL('/api/info', window.location.origin);
+                    console.log('🔍 Debug: Full URL:', configUrl.toString());
+                    
+                    const response = await fetch(configUrl);
+                    console.log('🔍 Debug: Response status:', response.status);
+                    
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch configuration: HTTP ${response.status}`);
                     }
+                    
+                    const info = await response.json();
+                    console.log('🔍 Debug: Response data:', info);
+                    
+                    if (!info.mount_path) {
+                        console.error('🔍 Debug: mount_path missing from response:', info);
+                        throw new Error('Configuration missing mount_path - check MOUNT_PATH environment variable');
+                    }
+                    
+                    this.apiBase = info.mount_path;
+                    console.log(`📊 Reporters API_BASE set to: ${this.apiBase}`);
                 } catch (error) {
-                    console.warn('Failed to load configuration, using default API_BASE:', error);
+                    console.error('❌ Configuration Error:', error);
+                    // Temporary fallback to prevent total failure
+                    this.apiBase = '/dashboard-mainnet';
+                    console.warn(`🔧 Using temporary fallback API_BASE: ${this.apiBase}`);
                 }
             }
             
