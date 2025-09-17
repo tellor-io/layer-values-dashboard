@@ -39,6 +39,45 @@ class DashboardMonitor:
         self.hang_threshold = hang_threshold
         self.last_restart = None
         self.restart_count = 0
+        self.log_filename = self._determine_log_filename()
+        
+    def _determine_log_filename(self):
+        """Determine the log filename based on mount path."""
+        # First try to get MOUNT_PATH from environment
+        mount_path = os.environ.get('MOUNT_PATH')
+        
+        if mount_path:
+            # Extract instance name from mount path (e.g., "/dashboard-mainnet" -> "mainnet")
+            if mount_path.startswith('/dashboard-'):
+                instance_name = mount_path.replace('/dashboard-', '').rstrip('/')
+                return f"dashboard_{instance_name}.log"
+        
+        # Fallback: try to detect from running process command line
+        try:
+            proc = self.find_dashboard_process()
+            if proc:
+                cmdline = ' '.join(proc.info.get('cmdline', []))
+                # Look for --mount-path argument
+                if '--mount-path' in cmdline:
+                    parts = cmdline.split('--mount-path')
+                    if len(parts) > 1:
+                        mount_arg = parts[1].split()[0]  # Get first word after --mount-path
+                        if mount_arg.startswith('/dashboard-'):
+                            instance_name = mount_arg.replace('/dashboard-', '').rstrip('/')
+                            return f"dashboard_{instance_name}.log"
+                
+                # Look for --instance-name argument
+                if '--instance-name' in cmdline:
+                    parts = cmdline.split('--instance-name')
+                    if len(parts) > 1:
+                        instance_name = parts[1].split()[0]  # Get first word after --instance-name
+                        return f"dashboard_{instance_name}.log"
+        except Exception as e:
+            logger.warning(f"Could not detect instance from process: {e}")
+        
+        # Final fallback: check LAYER_INSTANCE_NAME environment variable
+        instance_name = os.environ.get('LAYER_INSTANCE_NAME', 'mainnet')
+        return f"dashboard_{instance_name}.log"
         
     def find_dashboard_process(self):
         """Find the dashboard process."""
@@ -51,9 +90,13 @@ class DashboardMonitor:
                 continue
         return None
     
-    def get_log_last_activity(self, log_file="dashboard_palmito.log"):
+    def get_log_last_activity(self, log_file=None):
         """Get the timestamp of the last log activity."""
         try:
+            # Use dynamically determined log filename if not provided
+            if log_file is None:
+                log_file = self.log_filename
+                
             if not Path(log_file).exists():
                 logger.warning(f"Log file {log_file} not found")
                 return None
@@ -132,6 +175,7 @@ class DashboardMonitor:
         """Main monitoring loop."""
         logger.info("🔍 Starting dashboard health monitor...")
         logger.info(f"📊 Check interval: {self.check_interval}s, Hang threshold: {self.hang_threshold}s")
+        logger.info(f"📄 Monitoring log file: {self.log_filename}")
         
         while True:
             try:
