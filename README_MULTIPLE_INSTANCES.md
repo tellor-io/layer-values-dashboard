@@ -76,27 +76,6 @@ export LAYER_RPC_URL="http://localhost:26658"
 python -m uvicorn main:app --host 0.0.0.0 --port 8002
 ```
 
-## Directory Structure
-
-After running multiple instances, your directory structure should look like:
-
-```
-layer-values-dashboard/
-├── backend/
-│   ├── main.py
-│   ├── dashboard_palmito.log      # Instance-specific log
-│   └── dashboard_mainnet.log      # Instance-specific log
-├── source_tables_palmito/         # Palmito CSV data
-│   ├── table_1234567890.csv
-│   └── table_1234567891.csv
-├── source_tables_mainnet/         # Mainnet CSV data
-│   ├── table_2345678901.csv
-│   └── table_2345678902.csv
-├── layerd_palmito                 # Instance-specific binary (optional)
-├── layerd_mainnet                 # Instance-specific binary (optional)
-└── layerd                         # Fallback binary
-```
-
 ## Accessing Dashboard Instances
 
 Once running, access your dashboards at:
@@ -214,15 +193,6 @@ Each instance exposes the same API endpoints but with instance-specific data:
 ### Check Running Instances
 ```bash
 ps aux | grep uvicorn
-```
-
-### View Instance Logs
-```bash
-# Palmito logs
-tail -f backend/dashboard_palmito.log
-
-# Mainnet logs  
-tail -f backend/dashboard_mainnet.log
 ```
 
 ### Check Instance Status

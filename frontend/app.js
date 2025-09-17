@@ -9,8 +9,6 @@ let isQuestionableFilterActive = false; // Track questionable filter state
 // Enhanced cellular detection
 const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 const IS_CELLULAR = checkCellularConnection();
-const MOUNT_PATH = get env('MOUNT_PATH');
-const API_BASE = `${MOUNT_PATH}/api`;
 
 function checkCellularConnection() {
     // Check for cellular indicators
@@ -324,7 +322,25 @@ const showCellularErrorMessage = (error) => {
 // Initialize configuration from backend
 const initializeConfig = async () => {
     try {
-        const configUrl = new URL('/api/info', window.location.origin);
+        // Extract mount path from current URL
+        const currentPath = window.location.pathname;
+        let mountPath = '';
+        
+        // If we're on a path like /dashboard-mainnet/ or /dashboard-mainnet/something
+        if (currentPath.startsWith('/dashboard-')) {
+            const pathParts = currentPath.split('/');
+            if (pathParts.length >= 2) {
+                mountPath = '/' + pathParts[1];
+            }
+        }
+        
+        // Default fallback if we can't determine from URL
+        if (!mountPath) {
+            mountPath = '/dashboard-mainnet';
+        }
+        
+        // Test the mount path by calling the API
+        const configUrl = new URL(`${mountPath}/api/info`, window.location.origin);
         const response = await fetch(configUrl);
         
         if (!response.ok) {
