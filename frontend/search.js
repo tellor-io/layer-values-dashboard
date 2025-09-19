@@ -105,13 +105,14 @@ const formatNumber = (num) => {
 
 const formatValue = (value) => {
     if (value === null || value === undefined) return '-';
-    if (typeof value === 'number') {
+    const num = typeof value === 'number' ? value : Number(value);
+    if (!Number.isNaN(num) && Number.isFinite(num)) {
         return new Intl.NumberFormat('en-US', {
             minimumFractionDigits: 2,
             maximumFractionDigits: 6
-        }).format(value);
+        }).format(num);
     }
-    return value;
+    return String(value);
 };
 
 const formatTimestamp = (timestamp) => {
@@ -151,25 +152,50 @@ const truncateText = (text, maxLength = 20) => {
 
 const showLoading = () => {
     isLoading = true;
-    elements.loadingOverlay.classList.remove('hidden');
+    elements.loadingOverlay.style.display = 'flex';
 };
 
 const hideLoading = () => {
     isLoading = false;
-    elements.loadingOverlay.classList.add('hidden');
+    elements.loadingOverlay.style.display = 'none';
 };
 
 // Initialize configuration from backend
 const initializeConfig = async () => {
     try {
-        const configUrl = new URL('/api/info', window.location.origin);
+        // Extract mount path from current URL
+        const currentPath = window.location.pathname;
+        let mountPath = '';
+        
+        // If we're on a path like /dashboard-mainnet/ or /dashboard-mainnet/something
+        if (currentPath.startsWith('/dashboard-')) {
+            const pathParts = currentPath.split('/');
+            if (pathParts.length >= 2) {
+                mountPath = '/' + pathParts[1];
+            }
+        }
+        
+        // Default fallback if we can't determine from URL
+        if (!mountPath) {
+            mountPath = '/dashboard-mainnet';
+        }
+        
+        // Test the mount path by calling the API
+        const configUrl = new URL(`${mountPath}/api/info`, window.location.origin);
+        console.log(`🔧 Testing config URL: ${configUrl.toString()}`);
+        
         const response = await fetch(configUrl);
+        console.log(`📡 Config Response Status: ${response.status} ${response.statusText}`);
         
         if (!response.ok) {
-            throw new Error(`Failed to fetch configuration: HTTP ${response.status}`);
+            const errorText = await response.text();
+            console.error(`❌ Config Error Response: ${errorText}`);
+            throw new Error(`Failed to fetch configuration: HTTP ${response.status} - ${errorText}`);
         }
         
         const info = await response.json();
+        console.log(`📋 Config Info Response:`, info);
+        
         if (!info.mount_path) {
             throw new Error('Configuration missing mount_path - check MOUNT_PATH environment variable');
         }
@@ -192,12 +218,28 @@ const apiCall = async (endpoint, params = {}) => {
             }
         });
 
+        console.log(`🔍 API Call: ${url.toString()}`);
         const response = await fetch(url);
+        
+        console.log(`📡 Response Status: ${response.status} ${response.statusText}`);
+        console.log(`📄 Response Content-Type: ${response.headers.get('content-type')}`);
+        
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const errorText = await response.text();
+            console.error(`❌ HTTP Error Response: ${errorText}`);
+            throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
         }
         
-        return await response.json();
+        const responseText = await response.text();
+        console.log(`📝 Response Text (first 200 chars): ${responseText.substring(0, 200)}`);
+        
+        try {
+            return JSON.parse(responseText);
+        } catch (jsonError) {
+            console.error(`❌ JSON Parse Error: ${jsonError.message}`);
+            console.error(`❌ Response was not JSON: ${responseText}`);
+            throw new Error(`Invalid JSON response: ${jsonError.message}`);
+        }
     } catch (error) {
         console.error('API call failed:', error);
         throw error;
@@ -226,14 +268,20 @@ const performSearch = async (query, page = 1) => {
         window.history.pushState({}, '', url);
 
         // Search API call
+        console.log(`🔍 Performing search for: "${query}" (page ${page})`);
         const searchResponse = await apiCall('/api/search', {
             q: query,
             limit: RECORDS_PER_PAGE,
             offset: (page - 1) * RECORDS_PER_PAGE
         });
 
+        // Handle the search response structure 
         searchResults = searchResponse.data || [];
-        searchStats = searchResponse.stats || {};
+        searchStats = searchResponse.stats || {
+            total_matches: searchResponse.pagination?.total || 0,
+            unique_reporters: 0,
+            unique_query_ids: 0
+        };
 
         // Update summary stats
         updateSummaryStats();
@@ -252,7 +300,36 @@ const performSearch = async (query, page = 1) => {
 
     } catch (error) {
         console.error('Search failed:', error);
-        alert('Search failed. Please try again.');
+        
+        // Show detailed error message
+        let errorMessage = 'Search failed. ';
+        if (error.message.includes('Invalid JSON response')) {
+            errorMessage += 'The server returned an unexpected response format. This might be a server configuration issue.';
+        } else if (error.message.includes('HTTP error')) {
+            errorMessage += `Server error: ${error.message}`;
+        } else {
+            errorMessage += `Error: ${error.message}`;
+        }
+        
+        // Display error in the UI instead of just an alert
+        elements.searchResultsTbody.innerHTML = `
+            <tr>
+                <td colspan="9" class="text-center">
+                    <div style="padding: 2rem; color: #ff6b35;">
+                        <i class="fas fa-exclamation-triangle" style="font-size: 2rem; margin-bottom: 1rem; display: block;"></i>
+                        <div style="font-weight: bold; margin-bottom: 0.5rem;">Search Error</div>
+                        <div style="font-size: 0.9rem;">${errorMessage}</div>
+                        <div style="margin-top: 1rem; font-size: 0.8rem; color: #999;">
+                            Check the browser console for more details.
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        `;
+        
+        // Also show in console for debugging
+        console.log('📊 Current API_BASE:', API_BASE);
+        console.log('🌐 Current URL:', window.location.href);
     } finally {
         hideLoading();
     }
@@ -320,12 +397,16 @@ const generateSearchInsights = () => {
     }
     
     if (insights.length > 0) {
-        elements.insightsGrid.innerHTML = insights.map(insight => `
-            <div class="insight-card">
-                <div class="insight-title">${insight.title}</div>
-                <div class="insight-value">${insight.value}</div>
-            </div>
-        `).join('');
+        elements.insightsGrid.innerHTML = `
+            <ul class="insights-list">
+                ${insights.map(insight => `
+                    <li class="insight-item">
+                        <span class="insight-label">${insight.title}:</span>
+                        <span class="insight-data">${insight.value}</span>
+                    </li>
+                `).join('')}
+            </ul>
+        `;
         elements.searchInsights.style.display = 'block';
     } else {
         elements.searchInsights.style.display = 'none';
@@ -334,19 +415,21 @@ const generateSearchInsights = () => {
 
 // Format agreement percentage and class
 const formatAgreement = (reportedValue, trustedValue) => {
-    if (reportedValue === null || trustedValue === null || reportedValue === undefined || trustedValue === undefined) {
+    const r = typeof reportedValue === 'number' ? reportedValue : Number(reportedValue);
+    const t = typeof trustedValue === 'number' ? trustedValue : Number(trustedValue);
+    if (Number.isNaN(r) || Number.isNaN(t)) {
         return { text: 'N/A', class: 'agreement-na' };
     }
 
-    if (reportedValue === trustedValue) {
+    if (r === t) {
         return { text: '100%', class: 'agreement-perfect' };
     }
 
-    const diff = Math.abs(reportedValue - trustedValue);
-    const avg = (Math.abs(reportedValue) + Math.abs(trustedValue)) / 2;
+    const diff = Math.abs(r - t);
+    const avg = (Math.abs(r) + Math.abs(t)) / 2;
     
     if (avg === 0) {
-        return reportedValue === trustedValue ? 
+        return r === t ? 
             { text: '100%', class: 'agreement-perfect' } : 
             { text: '0%', class: 'agreement-poor' };
     }
@@ -481,6 +564,26 @@ const updatePagination = () => {
     elements.showingCount.textContent = total > 0 ? `${start}-${end} of ${formatNumber(total)}` : '0 of 0';
 };
 
+// Go back to dashboard function
+const goBackToDashboard = () => {
+    if (API_BASE) {
+        window.location.href = API_BASE;
+    } else {
+        // Fallback if API_BASE isn't set yet
+        const currentPath = window.location.pathname;
+        if (currentPath.startsWith('/dashboard-')) {
+            const pathParts = currentPath.split('/');
+            if (pathParts.length >= 2) {
+                window.location.href = '/' + pathParts[1];
+            } else {
+                window.location.href = '/dashboard-mainnet';
+            }
+        } else {
+            window.location.href = '/dashboard-mainnet';
+        }
+    }
+};
+
 // Initialize page
 const initializePage = async () => {
     // Initialize configuration first
@@ -493,16 +596,22 @@ const initializePage = async () => {
     
     if (query) {
         elements.newSearchInput.value = query;
-        performSearch(query, page);
+        await performSearch(query, page);
     } else {
         // Redirect to dashboard if no search query
-        window.location.href = API_BASE;
+        window.location.href = API_BASE || '/dashboard-mainnet';
     }
 };
 
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
     initializePage();
+    
+    // Add event listener for back button as backup
+    const backBtn = document.getElementById('back-to-dashboard-btn');
+    if (backBtn) {
+        backBtn.addEventListener('click', goBackToDashboard);
+    }
     
     // Search functionality
     elements.newSearchBtn.addEventListener('click', () => {
@@ -592,5 +701,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-// Make showDetails available globally
-window.showDetails = showDetails; 
+// Make functions available globally
+window.showDetails = showDetails;
+window.goBackToDashboard = goBackToDashboard; 

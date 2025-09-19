@@ -92,80 +92,37 @@
                 </div>
             </div>
 
-            <!-- Data Table -->
-            <div class="data-section">
-                <div class="data-header">
-                    <div class="data-header-left">
-                        <h2>
-                            <i class="fas fa-layer-group"></i>
-                            Tellor Data Explorer
-                        </h2>
-                        <div class="header-stats">
-                            <div class="stat-item">
-                                <span class="stat-label">Total Records Loaded</span>
-                                <span class="stat-value" id="total-records">-</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-label">Page Loaded</span>
-                                <span class="stat-value" id="page-load-time">
-                                    <i class="fas fa-clock"></i>
-                                    <span id="load-timestamp">Loading...</span>
-                                </span>
-                            </div>
+            <!-- Header Search for redirecting to search page -->
+            <div class="search-section">
+                <div class="header-search-container">
+                    <h2>
+                        <i class="fas fa-search"></i>
+                        Search Tellor Data
+                    </h2>
+                    <div class="search-info">
+                        <div class="stat-item">
+                            <span class="stat-label">Total Records Available</span>
+                            <span class="stat-value" id="total-records">-</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Last Updated</span>
+                            <span class="stat-value" id="load-timestamp">Loading...</span>
                         </div>
                     </div>
-                    <div class="data-controls">
-                        <div class="header-search-box">
-                            <i class="fas fa-search"></i>
-                            <input type="text" id="header-search-input" placeholder="Search anything in the data...">
-                            <button id="header-search-btn" class="btn btn-primary">Search</button>
-                            <span class="experimental-label">(search is currently experimental)</span>
-                        </div>
+                    <div class="header-search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="header-search-input" placeholder="Search anything in the data...">
+                        <button id="header-search-btn" class="btn btn-primary">Search</button>
+                        <span class="experimental-label">(search is currently experimental)</span>
+                    </div>
+                    <div class="search-links">
                         <a href="#" id="reporters-link" class="btn btn-secondary">
                             <i class="fas fa-users"></i> View Reporters
                         </a>
-                        <button id="refresh-data" class="btn btn-secondary">
-                            <i class="fas fa-sync"></i> Refresh
-                        </button>
-                        <div class="pagination-info">
-                            <span id="showing-info">Showing 0 of 0 records</span>
-                        </div>
                     </div>
-                </div>
-
-                <div class="table-container">
-                    <table class="data-table" id="data-table">
-                        <thead>
-                            <tr>
-                                <th>Details</th>
-                                <th>Query ID</th>
-                                <th>Reported Value</th>
-                                <th>Trusted Value</th>
-                                <th>Agreement</th>
-                                <th>Reporter</th>
-                                <th>Power</th>
-                                <th>Time Ago</th>
-                                <th>Disputable</th>
-                            </tr>
-                        </thead>
-                        <tbody id="data-tbody">
-                            <!-- Data will be loaded here -->
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="pagination">
-                    <button id="prev-page" class="btn btn-secondary" disabled>
-                        <i class="fas fa-chevron-left"></i> Previous
-                    </button>
-                    <div class="page-info">
-                        <span>Page <span id="current-page">1</span> of <span id="total-pages">1</span></span>
-                    </div>
-                    <button id="next-page" class="btn btn-secondary">
-                        Next <i class="fas fa-chevron-right"></i>
-                    </button>
                 </div>
             </div>
+
         </main>
 
         <!-- Loading overlay -->
