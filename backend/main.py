@@ -438,11 +438,26 @@ def load_historical_table(table_info):
         with db_lock:
             logger.info(f"📖 Reading CSV file: {table_info['path']}")
             
+            # Check if CSV has headers by examining first line (do this before try block)
+            has_headers = False
+            try:
+                with open(table_info['path'], 'r') as f:
+                    first_line = f.readline().strip()
+                    # If first line starts with 'tellor' it's data, not headers
+                    has_headers = not first_line.startswith('tellor')
+            except:
+                has_headers = True  # Default to assuming headers
+            
             try:
                 # First, inspect the CSV to understand its structure
                 logger.info("🔍 Inspecting CSV structure...")
                 csv_info = conn.execute(f"""
-                    SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
+                    SELECT * FROM read_csv_auto('{table_info['path']}', 
+                        sample_size=1000, 
+                        ignore_errors=true,
+                        null_padding=true,
+                        strict_mode=false
+                    )
                     LIMIT 3
                 """).fetchall()
                 
@@ -452,7 +467,12 @@ def load_historical_table(table_info):
                 
                 # Get column information
                 csv_columns = conn.execute(f"""
-                    DESCRIBE SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
+                    DESCRIBE SELECT * FROM read_csv_auto('{table_info['path']}', 
+                        sample_size=1000, 
+                        ignore_errors=true,
+                        null_padding=true,
+                        strict_mode=false
+                    )
                 """).fetchall()
                 
                 logger.info(f"📋 Found {len(csv_columns)} columns in CSV:")
@@ -483,15 +503,6 @@ def load_historical_table(table_info):
                 
                 # Load data directly with proper error handling and column mapping
                 # Note: POWER_OF_AGGR will be calculated after loading, not from CSV
-                # Check if CSV has headers by examining first line
-                has_headers = False
-                try:
-                    with open(table_info['path'], 'r') as f:
-                        first_line = f.readline().strip()
-                        # If first line starts with 'tellor' it's data, not headers
-                        has_headers = not first_line.startswith('tellor')
-                except:
-                    has_headers = True  # Default to assuming headers
                 
                 if has_headers:
                     # Use original column mapping approach
@@ -505,18 +516,20 @@ def load_historical_table(table_info):
                             {map_column('CYCLELIST')} as CYCLELIST,
                             {map_column('POWER')} as POWER,
                             {map_column('TIMESTAMP')} as TIMESTAMP,
-                            {map_column('TRUSTED_VALUE')} as TRUSTED_VALUE,
+                            CAST({map_column('TRUSTED_VALUE')} AS VARCHAR) as TRUSTED_VALUE,
                             {map_column('TX_HASH')} as TX_HASH,
                             {map_column('CURRENT_TIME')} as CURRENT_TIME,
                             {map_column('TIME_DIFF')} as TIME_DIFF,
-                            {map_column('VALUE')} as VALUE,
+                            CAST({map_column('VALUE')} AS VARCHAR) as VALUE,
                             {map_column('DISPUTABLE')} as DISPUTABLE,
                             '{table_info['filename']}' as source_file,
                             NULL as POWER_OF_AGGR
                         FROM read_csv_auto('{table_info['path']}', 
                             header=true,
                             sample_size=10000,
-                            ignore_errors=true
+                            ignore_errors=true,
+                            null_padding=true,
+                            strict_mode=false
                         )
                     """)
                 else:
@@ -532,18 +545,20 @@ def load_historical_table(table_info):
                             TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
                             TRY_CAST(column05 AS INTEGER) as POWER,
                             TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
-                            TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                            CAST(column07 AS VARCHAR) as TRUSTED_VALUE,
                             column08 as TX_HASH,
                             TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
                             TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
-                            TRY_CAST(column11 AS DOUBLE) as VALUE,
+                            CAST(column11 AS VARCHAR) as VALUE,
                             TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
                             '{table_info['filename']}' as source_file,
                             NULL as POWER_OF_AGGR
                         FROM read_csv_auto('{table_info['path']}', 
                             header=false,
                             sample_size=10000,
-                            ignore_errors=true
+                            ignore_errors=true,
+                            null_padding=true,
+                            strict_mode=false
                         )
                     """)
                 
@@ -574,11 +589,11 @@ def load_historical_table(table_info):
                                 TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
                                 TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
                                 TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
-                                TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
+                                CAST({map_column('TRUSTED_VALUE')} AS VARCHAR) as TRUSTED_VALUE,
                                 CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
                                 TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
                                 TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
-                                TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
+                                CAST({map_column('VALUE')} AS VARCHAR) as VALUE,
                                 TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
                                 '{table_info['filename']}' as source_file,
                                 NULL as POWER_OF_AGGR
@@ -600,11 +615,11 @@ def load_historical_table(table_info):
                                 TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
                                 TRY_CAST(column05 AS INTEGER) as POWER,
                                 TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
-                                TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                                CAST(column07 AS VARCHAR) as TRUSTED_VALUE,
                                 CAST(column08 AS VARCHAR) as TX_HASH,
                                 TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
                                 TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
-                                TRY_CAST(column11 AS DOUBLE) as VALUE,
+                                CAST(column11 AS VARCHAR) as VALUE,
                                 TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
                                 '{table_info['filename']}' as source_file,
                                 NULL as POWER_OF_AGGR
@@ -721,11 +736,26 @@ def load_active_table(table_info, is_reload=False):
             with db_lock:
                 logger.info(f"📖 Reading CSV file: {table_info['path']}")
                 
+                # Check if CSV has headers by examining first line (do this before try block)
+                has_headers = False
+                try:
+                    with open(table_info['path'], 'r') as f:
+                        first_line = f.readline().strip()
+                        # If first line starts with 'tellor' it's data, not headers
+                        has_headers = not first_line.startswith('tellor')
+                except:
+                    has_headers = True  # Default to assuming headers
+                
                 try:
                     # First, inspect the CSV to understand its structure
                     logger.info("🔍 Inspecting CSV structure...")
                     csv_info = conn.execute(f"""
-                        SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
+                        SELECT * FROM read_csv_auto('{table_info['path']}', 
+                            sample_size=1000, 
+                            ignore_errors=true,
+                            null_padding=true,
+                            strict_mode=false
+                        )
                         LIMIT 3
                     """).fetchall()
                     
@@ -740,7 +770,12 @@ def load_active_table(table_info, is_reload=False):
                     
                     # Get column information
                     csv_columns = conn.execute(f"""
-                        DESCRIBE SELECT * FROM read_csv_auto('{table_info['path']}', sample_size=100)
+                        DESCRIBE SELECT * FROM read_csv_auto('{table_info['path']}', 
+                            sample_size=1000, 
+                            ignore_errors=true,
+                            null_padding=true,
+                            strict_mode=false
+                        )
                     """).fetchall()
                     
                     logger.info(f"📋 Found {len(csv_columns)} columns in CSV:")
@@ -771,16 +806,6 @@ def load_active_table(table_info, is_reload=False):
                     
                     logger.info("📥 Loading CSV data into database...")
                     
-                    # Check if CSV has headers by examining first line
-                    has_headers = False
-                    try:
-                        with open(table_info['path'], 'r') as f:
-                            first_line = f.readline().strip()
-                            # If first line starts with 'tellor' it's data, not headers
-                            has_headers = not first_line.startswith('tellor')
-                    except:
-                        has_headers = True  # Default to assuming headers
-                    
                     if has_headers:
                         # Use original column mapping approach
                         conn.execute(f"""
@@ -804,7 +829,9 @@ def load_active_table(table_info, is_reload=False):
                             FROM read_csv_auto('{table_info['path']}', 
                                 header=true,
                                 sample_size=10000,
-                                ignore_errors=true
+                                ignore_errors=true,
+                                null_padding=true,
+                                strict_mode=false
                             )
                         """)
                     else:
@@ -820,18 +847,20 @@ def load_active_table(table_info, is_reload=False):
                                 TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
                                 TRY_CAST(column05 AS INTEGER) as POWER,
                                 TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
-                                TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                                CAST(column07 AS VARCHAR) as TRUSTED_VALUE,
                                 column08 as TX_HASH,
                                 TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
                                 TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
-                                TRY_CAST(column11 AS DOUBLE) as VALUE,
+                                CAST(column11 AS VARCHAR) as VALUE,
                                 TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
                                 '{table_info['filename']}' as source_file,
                                 NULL as POWER_OF_AGGR
                             FROM read_csv_auto('{table_info['path']}', 
                                 header=false,
                                 sample_size=10000,
-                                ignore_errors=true
+                                ignore_errors=true,
+                                null_padding=true,
+                                strict_mode=false
                             )
                         """)
                     
@@ -875,11 +904,11 @@ def load_active_table(table_info, is_reload=False):
                                     TRY_CAST({map_column('CYCLELIST')} AS BOOLEAN) as CYCLELIST,
                                     TRY_CAST({map_column('POWER')} AS INTEGER) as POWER,
                                     TRY_CAST({map_column('TIMESTAMP')} AS BIGINT) as TIMESTAMP,
-                                    TRY_CAST({map_column('TRUSTED_VALUE')} AS DOUBLE) as TRUSTED_VALUE,
+                                    CAST({map_column('TRUSTED_VALUE')} AS VARCHAR) as TRUSTED_VALUE,
                                     CAST({map_column('TX_HASH')} AS VARCHAR) as TX_HASH,
                                     TRY_CAST({map_column('CURRENT_TIME')} AS BIGINT) as CURRENT_TIME,
                                     TRY_CAST({map_column('TIME_DIFF')} AS INTEGER) as TIME_DIFF,
-                                    TRY_CAST({map_column('VALUE')} AS DOUBLE) as VALUE,
+                                    CAST({map_column('VALUE')} AS VARCHAR) as VALUE,
                                     TRY_CAST({map_column('DISPUTABLE')} AS BOOLEAN) as DISPUTABLE,
                                     '{table_info['filename']}' as source_file,
                                     NULL as POWER_OF_AGGR
@@ -901,11 +930,11 @@ def load_active_table(table_info, is_reload=False):
                                     TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
                                     TRY_CAST(column05 AS INTEGER) as POWER,
                                     TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
-                                    TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                                    CAST(column07 AS VARCHAR) as TRUSTED_VALUE,
                                     CAST(column08 AS VARCHAR) as TX_HASH,
                                     TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
                                     TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
-                                    TRY_CAST(column11 AS DOUBLE) as VALUE,
+                                    CAST(column11 AS VARCHAR) as VALUE,
                                     TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
                                     '{table_info['filename']}' as source_file,
                                     NULL as POWER_OF_AGGR
@@ -1033,7 +1062,13 @@ def load_active_table_incremental(table_info, size_change):
                 
                 # Get total rows in CSV file
                 total_csv_rows = safe_get(conn.execute(f"""
-                    SELECT COUNT(*) FROM read_csv_auto('{table_info['path']}', header={str(has_headers_for_count).lower()}, sample_size=1000)
+                    SELECT COUNT(*) FROM read_csv_auto('{table_info['path']}', 
+                        header={str(has_headers_for_count).lower()}, 
+                        sample_size=1000,
+                        ignore_errors=true,
+                        null_padding=true,
+                        strict_mode=false
+                    )
                 """).fetchone())
                 
                 if total_csv_rows <= current_rows:
@@ -1077,7 +1112,12 @@ def load_active_table_incremental(table_info, size_change):
                             NULL as POWER_OF_AGGR
                         FROM (
                             SELECT *, ROW_NUMBER() OVER () as rn
-                            FROM read_csv_auto('{table_info['path']}', header=true, ignore_errors=true)
+                            FROM read_csv_auto('{table_info['path']}', 
+                                header=true, 
+                                ignore_errors=true,
+                                null_padding=true,
+                                strict_mode=false
+                            )
                         ) WHERE rn > {current_rows}
                     """)
                 else:
@@ -1092,17 +1132,22 @@ def load_active_table_incremental(table_info, size_change):
                             TRY_CAST(column04 AS BOOLEAN) as CYCLELIST,
                             TRY_CAST(column05 AS INTEGER) as POWER,
                             TRY_CAST(column06 AS BIGINT) as TIMESTAMP,
-                            TRY_CAST(column07 AS DOUBLE) as TRUSTED_VALUE,
+                            CAST(column07 AS VARCHAR) as TRUSTED_VALUE,
                             column08 as TX_HASH,
                             TRY_CAST(column09 AS BIGINT) as CURRENT_TIME,
                             TRY_CAST(column10 AS INTEGER) as TIME_DIFF,
-                            TRY_CAST(column11 AS DOUBLE) as VALUE,
+                            CAST(column11 AS VARCHAR) as VALUE,
                             TRY_CAST(column12 AS BOOLEAN) as DISPUTABLE,
                             '{table_info['filename']}' as source_file,
                             NULL as POWER_OF_AGGR
                         FROM (
                             SELECT *, ROW_NUMBER() OVER () as rn
-                            FROM read_csv_auto('{table_info['path']}', header=false, ignore_errors=true)
+                            FROM read_csv_auto('{table_info['path']}', 
+                                header=false, 
+                                ignore_errors=true,
+                                null_padding=true,
+                                strict_mode=false
+                            )
                         ) WHERE rn > {current_rows}
                     """)
                 
@@ -1138,6 +1183,8 @@ def load_csv_files():
     try:
         # Use thread-safe database access
         with db_lock:
+            # Recreate table to ensure correct types now that TRUSTED_VALUE may be JSON/text
+            conn.execute("DROP TABLE IF EXISTS layer_data")
             # Create unified table schema with TX_HASH as primary key to prevent duplicates
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS layer_data (
@@ -1148,11 +1195,11 @@ def load_csv_files():
                     CYCLELIST BOOLEAN,
                     POWER INTEGER,
                     TIMESTAMP BIGINT,
-                    TRUSTED_VALUE DOUBLE,
+                    TRUSTED_VALUE VARCHAR,
                     TX_HASH VARCHAR PRIMARY KEY,
                     CURRENT_TIME BIGINT,
                     TIME_DIFF INTEGER,
-                    VALUE DOUBLE,
+                    VALUE VARCHAR,
                     DISPUTABLE BOOLEAN,
                     source_file VARCHAR,
                     POWER_OF_AGGR BIGINT
@@ -1696,11 +1743,11 @@ async def get_data(
                             'CYCLELIST': bool(row[4]) if row[4] is not None else False,
                             'POWER': int(row[5]) if row[5] is not None else 0,
                             'TIMESTAMP': int(row[6]) if row[6] is not None else 0,
-                            'TRUSTED_VALUE': float(row[7]) if row[7] is not None else 0.0,
+                            'TRUSTED_VALUE': row[7] if row[7] is not None else '',
                             'TX_HASH': row[8] if row[8] is not None else '',
                             'CURRENT_TIME': int(row[9]) if row[9] is not None else 0,
                             'TIME_DIFF': int(row[10]) if row[10] is not None else 0,
-                            'VALUE': float(row[11]) if row[11] is not None else 0.0,
+                            'VALUE': row[11] if row[11] is not None else '',
                             'DISPUTABLE': bool(row[12]) if row[12] is not None else False,
                             'source_file': row[13] if row[13] is not None else ''
                         })
@@ -1713,6 +1760,7 @@ async def get_data(
                     logger.info(f"🔍 Debug: First row keys: {list(data[0].keys())}")
                     logger.info(f"🔍 Debug: First row sample: {data[0]}")
                 
+                # No casting here; values are returned as stored (strings). Frontend handles numeric formatting.
                 response_data = {
                     "data": data,
                     "total": total,
@@ -1831,17 +1879,21 @@ async def get_stats(request: Request):
             # Average agreement calculation - simplified and more robust
             # Calculate agreement percentage for all records where both values exist
             average_agreement_result = conn.execute("""
+                WITH casted AS (
+                    SELECT 
+                        TRY_CAST(VALUE AS DOUBLE) AS V,
+                        TRY_CAST(TRUSTED_VALUE AS DOUBLE) AS T
+                    FROM layer_data
+                )
                 SELECT 
                     AVG(CASE 
-                        WHEN VALUE = TRUSTED_VALUE THEN 100.0
-                        WHEN TRUSTED_VALUE != 0 THEN 
-                            GREATEST(0, (1 - ABS((VALUE - TRUSTED_VALUE) / TRUSTED_VALUE)) * 100)
+                        WHEN V = T THEN 100.0
+                        WHEN T IS NOT NULL AND T != 0 THEN 
+                            GREATEST(0, (1 - ABS((V - T) / T)) * 100)
                         ELSE NULL 
                     END) as avg_agreement
-                FROM layer_data
-                WHERE VALUE IS NOT NULL 
-                AND TRUSTED_VALUE IS NOT NULL 
-                AND TRUSTED_VALUE != 0
+                FROM casted
+                WHERE V IS NOT NULL AND T IS NOT NULL
             """).fetchone()
             
             if average_agreement_result and len(average_agreement_result) > 0 and average_agreement_result[0] is not None:
@@ -1851,11 +1903,14 @@ async def get_stats(request: Request):
             
             # Value statistics
             value_stats = conn.execute("""
+                WITH casted AS (
+                    SELECT TRY_CAST(VALUE AS DOUBLE) AS V FROM layer_data
+                )
                 SELECT 
-                    MIN(VALUE) as min_value,
-                    MAX(VALUE) as max_value,
-                    MEDIAN(VALUE) as median_value
-                FROM layer_data
+                    MIN(V) as min_value,
+                    MAX(V) as max_value,
+                    MEDIAN(V) as median_value
+                FROM casted
             """).fetchone()
             
             stats["value_stats"] = {
@@ -2135,23 +2190,35 @@ async def search_data(
             
             # Generate statistics and insights
             stats_query = f"""
+                WITH filtered AS (
+                    SELECT * FROM layer_data WHERE (
+                        REPORTER LIKE '%{q}%' OR
+                        QUERY_ID LIKE '%{q}%' OR
+                        TX_HASH LIKE '%{q}%' OR
+                        CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                    ) AND {safe_filter}
+                ),
+                casted AS (
+                    SELECT 
+                        TRY_CAST(VALUE AS DOUBLE) AS V,
+                        TRY_CAST(TRUSTED_VALUE AS DOUBLE) AS T,
+                        REPORTER,
+                        QUERY_ID,
+                        TIMESTAMP,
+                        POWER
+                    FROM filtered
+                )
                 SELECT 
                     COUNT(*) as total_matches,
                     COUNT(DISTINCT REPORTER) as unique_reporters,
                     COUNT(DISTINCT QUERY_ID) as unique_query_ids,
-                    MIN(VALUE) as min_value,
-                    MAX(VALUE) as max_value,
-                    AVG(CASE WHEN VALUE = TRUSTED_VALUE THEN 1.0 ELSE 0.0 END) as avg_agreement,
+                    MIN(V) as min_value,
+                    MAX(V) as max_value,
+                    AVG(CASE WHEN V IS NOT NULL AND T IS NOT NULL AND V = T THEN 1.0 ELSE 0.0 END) as avg_agreement,
                     MIN(TIMESTAMP) as oldest_timestamp,
                     MAX(TIMESTAMP) as newest_timestamp,
                     SUM(POWER) as total_power
-                FROM layer_data 
-                WHERE (
-                    REPORTER LIKE '%{q}%' OR
-                    QUERY_ID LIKE '%{q}%' OR
-                    TX_HASH LIKE '%{q}%' OR
-                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
-                ) AND {safe_filter}
+                FROM casted
             """
             
             stats_result = conn.execute(stats_query, safe_params).fetchone()
@@ -2601,15 +2668,22 @@ async def get_reporter_power_analytics(
                 
                 # Get query info
                 query_info = conn.execute("""
+                    WITH casted AS (
+                        SELECT 
+                            TRY_CAST(VALUE AS DOUBLE) AS V,
+                            REPORTER,
+                            QUERY_TYPE
+                        FROM layer_data
+                        WHERE TIMESTAMP = ? AND QUERY_ID = ?
+                    )
                     SELECT 
                         COUNT(*) as total_reports,
                         COUNT(DISTINCT REPORTER) as unique_reporters,
-                        AVG(VALUE) as avg_value,
-                        MIN(VALUE) as min_value,
-                        MAX(VALUE) as max_value,
+                        AVG(V) as avg_value,
+                        MIN(V) as min_value,
+                        MAX(V) as max_value,
                         QUERY_TYPE
-                    FROM layer_data 
-                    WHERE TIMESTAMP = ? AND QUERY_ID = ?
+                    FROM casted
                     GROUP BY QUERY_TYPE
                 """, [target_timestamp, query_id]).fetchone()
                 
@@ -2848,14 +2922,23 @@ async def get_agreement_analytics(
                 
                 # Get bucketed deviation data for this query ID with safe timestamp filtering
                 results = conn.execute(f"""
-                    WITH time_buckets AS (
+                    WITH casted AS (
                         SELECT 
                             TIMESTAMP,
                             FLOOR((TIMESTAMP - ?) / ?) as bucket_id,
-                            ABS((VALUE - TRUSTED_VALUE) / TRUSTED_VALUE) * 100 as deviation_percent
+                            TRY_CAST(VALUE AS DOUBLE) AS V,
+                            TRY_CAST(TRUSTED_VALUE AS DOUBLE) AS T
                         FROM layer_data 
                         WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
-                        AND QUERY_ID = ? AND TRUSTED_VALUE != 0 AND {safe_filter}
+                        AND QUERY_ID = ? AND {safe_filter}
+                    ),
+                    time_buckets AS (
+                        SELECT bucket_id,
+                               CASE WHEN T IS NOT NULL AND T != 0 AND V IS NOT NULL
+                                    THEN ABS((V - T) / T) * 100
+                                    ELSE NULL
+                               END AS deviation_percent
+                        FROM casted
                     )
                     SELECT 
                         bucket_id,
@@ -3062,14 +3145,21 @@ async def get_reporter_detail(address: str):
             
             # Get reporter's transaction stats
             stats_result = conn.execute("""
+                WITH casted AS (
+                    SELECT 
+                        TRY_CAST(VALUE AS DOUBLE) AS V,
+                        QUERY_ID,
+                        TIMESTAMP
+                    FROM layer_data 
+                    WHERE REPORTER = ?
+                )
                 SELECT 
                     COUNT(*) as total_transactions,
                     COUNT(DISTINCT QUERY_ID) as unique_queries,
-                    AVG(VALUE) as avg_value,
+                    AVG(V) as avg_value,
                     MIN(TIMESTAMP) as first_transaction,
                     MAX(TIMESTAMP) as last_transaction
-                FROM layer_data 
-                WHERE REPORTER = ?
+                FROM casted
             """, [address]).fetchone()
             
             stats = {

@@ -105,13 +105,14 @@ const formatNumber = (num) => {
 
 const formatValue = (value) => {
     if (value === null || value === undefined) return '-';
-    if (typeof value === 'number') {
+    const num = typeof value === 'number' ? value : Number(value);
+    if (!Number.isNaN(num) && Number.isFinite(num)) {
         return new Intl.NumberFormat('en-US', {
             minimumFractionDigits: 2,
             maximumFractionDigits: 6
-        }).format(value);
+        }).format(num);
     }
-    return value;
+    return String(value);
 };
 
 const formatTimestamp = (timestamp) => {
@@ -334,19 +335,21 @@ const generateSearchInsights = () => {
 
 // Format agreement percentage and class
 const formatAgreement = (reportedValue, trustedValue) => {
-    if (reportedValue === null || trustedValue === null || reportedValue === undefined || trustedValue === undefined) {
+    const r = typeof reportedValue === 'number' ? reportedValue : Number(reportedValue);
+    const t = typeof trustedValue === 'number' ? trustedValue : Number(trustedValue);
+    if (Number.isNaN(r) || Number.isNaN(t)) {
         return { text: 'N/A', class: 'agreement-na' };
     }
 
-    if (reportedValue === trustedValue) {
+    if (r === t) {
         return { text: '100%', class: 'agreement-perfect' };
     }
 
-    const diff = Math.abs(reportedValue - trustedValue);
-    const avg = (Math.abs(reportedValue) + Math.abs(trustedValue)) / 2;
+    const diff = Math.abs(r - t);
+    const avg = (Math.abs(r) + Math.abs(t)) / 2;
     
     if (avg === 0) {
-        return reportedValue === trustedValue ? 
+        return r === t ? 
             { text: '100%', class: 'agreement-perfect' } : 
             { text: '0%', class: 'agreement-poor' };
     }

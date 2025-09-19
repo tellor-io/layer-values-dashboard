@@ -137,13 +137,14 @@ const formatNumber = (num) => {
 
 const formatValue = (value) => {
     if (value === null || value === undefined) return '-';
-    if (typeof value === 'number') {
+    const num = typeof value === 'number' ? value : Number(value);
+    if (!Number.isNaN(num) && Number.isFinite(num)) {
         return new Intl.NumberFormat('en-US', {
             minimumFractionDigits: 2,
             maximumFractionDigits: 6
-        }).format(value);
+        }).format(num);
     }
-    return value;
+    return String(value);
 };
 
 const formatTimestamp = (timestamp) => {
@@ -597,41 +598,34 @@ const searchData = async (query, forceRefresh = false) => {
 };
 
 const formatAgreement = (reportedValue, trustedValue) => {
-    if (reportedValue === null || reportedValue === undefined || 
-        trustedValue === null || trustedValue === undefined || trustedValue === 0) {
+    const r = typeof reportedValue === 'number' ? reportedValue : Number(reportedValue);
+    const t = typeof trustedValue === 'number' ? trustedValue : Number(trustedValue);
+    if (Number.isNaN(r) || Number.isNaN(t) || !Number.isFinite(t) || t === 0) {
         return '-';
     }
-    
-    // Handle perfect agreement
-    if (reportedValue === trustedValue) {
+    if (r === t) {
         return '100.00%';
     }
-    
-    const percentDiff = Math.abs((reportedValue - trustedValue) / trustedValue);
+    const percentDiff = Math.abs((r - t) / t);
     const agreement = Math.max(0, (1 - percentDiff) * 100);
-    
-    // Format with 2 decimal places and add % sign
     return `${agreement.toFixed(2)}%`;
 };
 
 const getAgreementClass = (reportedValue, trustedValue) => {
-    if (reportedValue === null || reportedValue === undefined || 
-        trustedValue === null || trustedValue === undefined || trustedValue === 0) {
+    const r = typeof reportedValue === 'number' ? reportedValue : Number(reportedValue);
+    const t = typeof trustedValue === 'number' ? trustedValue : Number(trustedValue);
+    if (Number.isNaN(r) || Number.isNaN(t) || !Number.isFinite(t) || t === 0) {
         return 'agreement-na';
     }
-    
-    // Handle perfect agreement
-    if (reportedValue === trustedValue) {
+    if (r === t) {
         return 'agreement-perfect';
     }
-    
-    const percentDiff = Math.abs((reportedValue - trustedValue) / trustedValue);
+    const percentDiff = Math.abs((r - t) / t);
     const agreement = Math.max(0, (1 - percentDiff) * 100);
-    
-    if (agreement >= 99) return 'agreement-perfect';     // ≥99% agreement
-    if (agreement >= 95) return 'agreement-good';       // ≥95% agreement  
-    if (agreement >= 90) return 'agreement-moderate';   // ≥90% agreement
-    return 'agreement-poor';                             // <90% agreement
+    if (agreement >= 99) return 'agreement-perfect';
+    if (agreement >= 95) return 'agreement-good';
+    if (agreement >= 90) return 'agreement-moderate';
+    return 'agreement-poor';
 };
 
 const renderTable = (data) => {
