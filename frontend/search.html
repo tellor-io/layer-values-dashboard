@@ -16,7 +16,7 @@
             <!-- Search Header -->
             <div class="search-header">
                 <div class="search-header-left">
-                    <button onclick="history.back()" class="btn btn-secondary back-btn">
+                    <button onclick="goBackToDashboard()" class="btn btn-secondary back-btn" id="back-to-dashboard-btn">
                         <i class="fas fa-arrow-left"></i> Back to Dashboard
                     </button>
                     <h1>
@@ -158,7 +158,7 @@
         </main>
 
         <!-- Loading overlay -->
-        <div class="loading-overlay" id="loading-overlay">
+        <div class="loading-overlay" id="loading-overlay" style="display: none;">
             <div class="spinner"></div>
             <div class="loading-text">Searching data...</div>
         </div>

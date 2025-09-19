@@ -1,10 +1,11 @@
 // Global state
-let currentPage = 1;
-let currentFilters = {};
 let isLoading = false;
 let totalRecords = 0;
 let pageLoadTime = new Date(); // Store page load time
 let isQuestionableFilterActive = false; // Track questionable filter state
+
+// Query ID mappings
+let queryMappings = {};
 
 // Enhanced cellular detection
 const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -33,8 +34,41 @@ const REQUEST_TIMEOUT = IS_CELLULAR ? 8001 : (IS_MOBILE ? 15000 : 30000);
 const MAX_RETRIES = IS_CELLULAR ? 1 : (IS_MOBILE ? 2 : 3);
 
 // Configuration with mobile detection
-const RECORDS_PER_PAGE = 100;
 let API_BASE = ''; // Will be set to MOUNT_PATH from backend config
+
+// Query ID mapping functions
+const loadQueryMappings = async () => {
+    try {
+        // Try relative to static assets first, then fallback to root
+        let response = await fetch(`${API_BASE}/static/query_mappings.json`);
+        if (!response.ok) {
+            response = await fetch('/query_mappings.json');
+        }
+        
+        if (response.ok) {
+            queryMappings = await response.json();
+            console.log(`📊 Loaded ${Object.keys(queryMappings).length} query ID mappings:`, queryMappings);
+        } else {
+            console.warn('⚠️ Failed to load query mappings, using default display');
+            queryMappings = {};
+        }
+    } catch (error) {
+        console.warn('⚠️ Error loading query mappings:', error);
+        queryMappings = {};
+    }
+};
+
+const formatQueryId = (queryId) => {
+    if (queryMappings[queryId]) {
+        return queryMappings[queryId];
+    }
+    // Fallback to truncated version
+    return queryId.length > 15 ? queryId.substring(0, 12) + '...' : queryId;
+};
+
+const getFullQueryId = (queryId) => {
+    return queryId; // Always return the full query ID for tooltips
+};
 
 // DOM elements
 const elements = {
@@ -56,21 +90,9 @@ const elements = {
     questionableSubtitle: document.getElementById('questionable-subtitle'),
     urgentIndicator: document.getElementById('urgent-indicator'),
     
-    // Header search
+    // Header search - for redirecting to search page
     headerSearchInput: document.getElementById('header-search-input'),
     headerSearchBtn: document.getElementById('header-search-btn'),
-    
-    // Data table
-    dataTable: document.getElementById('data-table'),
-    dataTbody: document.getElementById('data-tbody'),
-    showingInfo: document.getElementById('showing-info'),
-    refreshData: document.getElementById('refresh-data'),
-    
-    // Pagination
-    prevPage: document.getElementById('prev-page'),
-    nextPage: document.getElementById('next-page'),
-    currentPageSpan: document.getElementById('current-page'),
-    totalPages: document.getElementById('total-pages'),
     
     // Loading and modal
     loadingOverlay: document.getElementById('loading-overlay'),
@@ -459,10 +481,8 @@ const loadStats = async (forceRefresh = false) => {
             stats.top_query_ids.forEach(queryId => {
                 const option = document.createElement('option');
                 option.value = queryId.QUERY_ID;
-                const shortQueryId = queryId.QUERY_ID.length > 30 
-                    ? queryId.QUERY_ID.substring(0, 30) + '...' 
-                    : queryId.QUERY_ID;
-                option.textContent = `${shortQueryId} (${queryId.count})`;
+                const displayQueryId = formatQueryId(queryId.QUERY_ID);
+                option.textContent = `${displayQueryId} (${queryId.count})`;
                 option.title = queryId.QUERY_ID; // Full query ID on hover
                 elements.queryIdSelect.appendChild(option);
             });
@@ -489,113 +509,8 @@ const loadStats = async (forceRefresh = false) => {
     }
 };
 
-// Enhanced loading with mobile optimization
-const loadData = async (page = 1, filters = {}, forceRefresh = false) => {
-    showLoading();
-    
-    try {
-        // Mobile optimization: smaller page size
-        const pageSize = IS_MOBILE ? 50 : RECORDS_PER_PAGE;
-        
-        const params = {
-            limit: pageSize,
-            offset: (page - 1) * pageSize,
-            ...filters
-        };
-        
-        console.log(`📊 Loading data - Page: ${page}, Mobile: ${IS_MOBILE}, PageSize: ${pageSize}${forceRefresh ? ' (FORCE REFRESH)' : ''}`);
-        
-        const response = await apiCall('/data', params, MAX_RETRIES, forceRefresh);
-        
-        // Update table
-        renderTable(response.data);
-        
-        // Handle pagination with mobile page size
-        const totalPages = Math.ceil(response.total / pageSize);
-        updatePagination(page, totalPages, response.total, response.offset);
-        
-        currentPage = page;
-        
-    } catch (error) {
-        console.error('Failed to load data:', error);
-        elements.dataTbody.innerHTML = `
-            <tr>
-                <td colspan="9" class="text-center text-red">
-                    ${IS_MOBILE ? 'Connection error. Please check your network.' : 'Failed to load data'}
-                </td>
-            </tr>
-        `;
-    } finally {
-        hideLoading();
-    }
-};
 
-const showLimitedViewNotice = (actualTotal, limitedTotal) => {
-    // Create a small notice banner
-    const notice = document.createElement('div');
-    notice.className = 'limited-view-notice';
-    notice.innerHTML = `
-        <div class="notice-content">
-            <i class="fas fa-info-circle"></i>
-            <span>Showing most recent ${limitedTotal.toLocaleString()} of ${actualTotal.toLocaleString()} total records for faster loading. Use filters to search all data.</span>
-            <button class="notice-close" onclick="this.parentElement.parentElement.remove()">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-    `;
-    
-    // Insert notice before the data table
-    const dataSection = document.querySelector('.data-section');
-    dataSection.insertBefore(notice, dataSection.firstChild);
-    
-    // Auto-remove after 10 seconds
-    setTimeout(() => {
-        if (notice.parentElement) {
-            notice.remove();
-        }
-    }, 10000);
-};
 
-const updatePagination = (page, totalPages, total, offset, additionalInfo = '') => {
-    elements.currentPageSpan.textContent = page;
-    elements.totalPages.textContent = totalPages;
-    
-    const start = offset + 1;
-    const end = Math.min(offset + RECORDS_PER_PAGE, total);
-    elements.showingInfo.textContent = `Showing ${start}-${end} of ${formatNumber(total)} records${additionalInfo}`;
-    
-    elements.prevPage.disabled = page <= 1;
-    elements.nextPage.disabled = page >= totalPages;
-};
-
-const searchData = async (query, forceRefresh = false) => {
-    if (!query.trim()) {
-        await loadData(1, currentFilters, forceRefresh);
-        return;
-    }
-    
-    showLoading();
-    
-    try {
-        const response = await apiCall('/search', { q: query.trim() }, MAX_RETRIES, forceRefresh);
-        
-        // Update table with search results
-        renderTable(response.results);
-        
-        // Update pagination info for search
-        elements.showingInfo.textContent = `Found ${response.count} results for "${query}"`;
-        elements.prevPage.disabled = true;
-        elements.nextPage.disabled = true;
-        elements.currentPageSpan.textContent = '1';
-        elements.totalPages.textContent = '1';
-        
-    } catch (error) {
-        console.error('Search failed:', error);
-        elements.dataTbody.innerHTML = '<tr><td colspan="9" class="text-center text-red">Search failed</td></tr>';
-    } finally {
-        hideLoading();
-    }
-};
 
 const formatAgreement = (reportedValue, trustedValue) => {
     const r = typeof reportedValue === 'number' ? reportedValue : Number(reportedValue);
@@ -628,34 +543,6 @@ const getAgreementClass = (reportedValue, trustedValue) => {
     return 'agreement-poor';
 };
 
-const renderTable = (data) => {
-    if (!data || data.length === 0) {
-        elements.dataTbody.innerHTML = '<tr><td colspan="9" class="text-center text-gray">No data found</td></tr>';
-        return;
-    }
-    
-    elements.dataTbody.innerHTML = data.map(row => `
-        <tr>
-            <td>
-                <button class="action-btn" onclick="showDetails(${JSON.stringify(row).replace(/"/g, '&quot;')})">
-                    <i class="fas fa-eye"></i>
-                </button>
-            </td>
-            <td class="hash" title="${row.QUERY_ID}">${row.QUERY_ID}</td>
-            <td class="value">${formatValue(row.VALUE)}</td>
-            <td class="trusted-value">${formatValue(row.TRUSTED_VALUE)}</td>
-            <td class="agreement ${getAgreementClass(row.VALUE, row.TRUSTED_VALUE)}">${formatAgreement(row.VALUE, row.TRUSTED_VALUE)}</td>
-            <td class="reporter" title="${row.REPORTER}">${row.REPORTER}</td>
-            <td class="text-center">${formatNumber(row.POWER)}</td>
-            <td class="text-center time-ago">${formatTimeAgo(row.TIMESTAMP)}</td>
-            <td class="text-center">
-                <span class="badge ${row.DISPUTABLE ? 'badge-danger' : 'badge-success'}">
-                    ${row.DISPUTABLE ? 'Yes' : 'No'}
-                </span>
-            </td>
-        </tr>
-    `).join('');
-};
 
 const showDetails = (row) => {
     const content = `
@@ -723,40 +610,18 @@ const showDetails = (row) => {
 };
 
 const showQuestionableValues = async () => {
-    // Clear header search input
-    elements.headerSearchInput.value = '';
-    
-    // Toggle questionable filter
+    // Toggle questionable filter - redirect to search page with appropriate filter
     if (isQuestionableFilterActive) {
-        // Remove filter - show all data
-        currentFilters = {};
-        currentPage = 1;
+        // Remove filter - redirect to search page without filter
         isQuestionableFilterActive = false;
-        
-        // Remove active styling
         elements.questionableCard.classList.remove('filter-active');
-        
-        // Update subtitle to default
-        if (elements.questionableSubtitle.textContent.includes('Click to view')) {
-            // Keep the existing subtitle if it's the default
-        } else {
-            elements.questionableSubtitle.textContent = 'Click to view';
-        }
+        window.location.href = `${API_BASE}/search`;
     } else {
-        // Apply filter - show only questionable values
-        currentFilters = { questionable_only: true };
-        currentPage = 1;
+        // Apply filter - redirect to search page with questionable filter
         isQuestionableFilterActive = true;
-        
-        // Add active styling
         elements.questionableCard.classList.add('filter-active');
-        
-        // Update subtitle to indicate filter is active
-        elements.questionableSubtitle.textContent = 'Click to remove filter';
+        window.location.href = `${API_BASE}/search?questionable_only=true`;
     }
-    
-    // Load data with current filters
-    await loadData(currentPage, currentFilters);
 };
 
 // Analytics functionality
@@ -1984,9 +1849,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         reportersLink.href = `${API_BASE}/reporters`;
     }
     
+    // Load query ID mappings first
+    await loadQueryMappings();
+    
     // Initial load
     await loadStats();
-    await loadData();
     
     // Analytics card click
     elements.recentActivityCard.addEventListener('click', showAnalyticsModal);
@@ -2018,28 +1885,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 window.location.href = `${API_BASE}/search?q=${encodeURIComponent(query)}`;
             }
         }
-    });
-    
-    // Pagination
-    elements.prevPage.addEventListener('click', () => {
-        if (currentPage > 1) {
-            loadData(currentPage - 1, currentFilters);
-        }
-    });
-    
-    elements.nextPage.addEventListener('click', () => {
-        loadData(currentPage + 1, currentFilters);
-    });
-    
-    // Refresh button
-    elements.refreshData.addEventListener('click', () => {
-        // Update load time when refreshing
-        pageLoadTime = new Date();
-        updateLoadTime();
-        
-        // Refresh data and stats with cache busting
-        loadStats(true);  // Force refresh for stats
-        loadData(currentPage, currentFilters, true);  // Force refresh for data
     });
     
     // Modal functionality
@@ -2160,7 +2005,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                     pageLoadTime = new Date();
                     updateLoadTime();
                     loadStats(true);  // Force refresh for stats
-                    loadData(currentPage, currentFilters, true);  // Force refresh for data
                     break;
             }
         }

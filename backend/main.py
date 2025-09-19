@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import psutil
 import gc
+import json
 
 import logging
 from contextlib import asynccontextmanager
@@ -41,6 +42,41 @@ except Exception as e:
 
 # Global reporter fetcher instance
 reporter_fetcher = None
+
+# Query ID mapping functionality
+query_mappings = {}
+query_mappings_lock = threading.Lock()
+
+def load_query_mappings():
+    """Load query ID mappings from JSON file"""
+    global query_mappings
+    mappings_file = Path(__file__).parent.parent / "query_mappings.json"
+    
+    try:
+        with query_mappings_lock:
+            if mappings_file.exists():
+                with open(mappings_file, 'r') as f:
+                    query_mappings = json.load(f)
+                logger.info(f"✅ Loaded {len(query_mappings)} query ID mappings")
+            else:
+                query_mappings = {}
+                logger.info("ℹ️  No query mappings file found, using default truncation")
+    except Exception as e:
+        logger.error(f"❌ Failed to load query mappings: {e}")
+        query_mappings = {}
+
+def get_query_display_name(query_id):
+    """Get human-readable name for query ID, fallback to truncated version"""
+    with query_mappings_lock:
+        if query_id in query_mappings:
+            return query_mappings[query_id]
+        else:
+            # Fallback to truncated version
+            return query_id[:12] + "..." if len(query_id) > 15 else query_id
+
+def reload_query_mappings():
+    """Reload query mappings from file"""
+    load_query_mappings()
 
 # Add this helper function FIRST
 def formatNumber(num):
@@ -1433,6 +1469,10 @@ async def startup_event():
     """Initialize data on startup"""
     global reporter_fetcher
     logger.info("🚀 Starting Layer Values Dashboard")
+    
+    # Load query ID mappings
+    load_query_mappings()
+    
     # Load data on startup
     load_csv_files()
     
@@ -2373,7 +2413,7 @@ async def get_query_analytics(
                 query_id_list.append({
                     "id": query_id,
                     "total_count": query_id_row[1],
-                    "short_name": query_id[:12] + "..." if len(query_id) > 15 else query_id
+                    "short_name": get_query_display_name(query_id)
                 })
                 
                 # Get bucketed data for this query ID with safe timestamp filtering
@@ -2619,7 +2659,7 @@ async def get_reporter_power_analytics(
                 "id": row[0],
                 "report_count": row[1],
                 "unique_reporters": row[2],
-                "short_name": row[0][:15] + "..." if len(row[0]) > 18 else row[0]
+                "short_name": get_query_display_name(row[0])
             } for row in query_ids_24h]
             
             # Build the main query based on whether we're filtering by query ID
@@ -2917,7 +2957,7 @@ async def get_agreement_analytics(
                 query_id_list.append({
                     "id": query_id,
                     "total_count": query_id_row[1],
-                    "short_name": query_id[:12] + "..." if len(query_id) > 15 else query_id
+                    "short_name": get_query_display_name(query_id)
                 })
                 
                 # Get bucketed deviation data for this query ID with safe timestamp filtering
@@ -3486,6 +3526,19 @@ async def get_reporter_fetcher_status():
         }
 
 # Duplicate force_refresh function removed - using the one defined earlier
+
+@dashboard_app.post("/api/reload-query-mappings")
+async def reload_query_mappings_endpoint():
+    """Reload query ID mappings from file"""
+    try:
+        reload_query_mappings()
+        return JSONResponse(content={
+            "status": "success",
+            "message": f"Successfully reloaded {len(query_mappings)} query ID mappings"
+        })
+    except Exception as e:
+        logger.error(f"Failed to reload query mappings: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload query mappings: {str(e)}")
 
 @dashboard_app.post("/api/trigger-historical-maximal-power")
 async def trigger_historical_maximal_power():
