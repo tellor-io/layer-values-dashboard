@@ -379,21 +379,14 @@ const generateSearchInsights = () => {
             });
         }
         
-        // Time range
+        // Time range of data shown
         if (searchStats.time_range) {
             insights.push({
-                title: 'Time Range',
+                title: 'Time Range of Data Shown',
                 value: `${formatTimeAgo(searchStats.time_range.oldest)} to ${formatTimeAgo(searchStats.time_range.newest)}`
             });
         }
-        
-        // Power distribution
-        if (searchStats.power_stats) {
-            insights.push({
-                title: 'Total Power Involved',
-                value: formatValue(searchStats.power_stats.total)
-            });
-        }
+
     }
     
     if (insights.length > 0) {

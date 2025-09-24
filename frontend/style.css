@@ -1920,4 +1920,41 @@ body {
         text-align: left;
         word-break: break-word;
     }
+}
+
+/* Enhanced table styling with separating lines */
+.data-table {
+    border-collapse: separate;
+    border-spacing: 8px 0;
+}
+
+.data-table th,
+.data-table td {
+    border-right: 1px solid rgba(85, 85, 102, 0.3);
+    border-bottom: 1px solid rgba(85, 85, 102, 0.2);
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+.data-table th:last-child,
+.data-table td:last-child {
+    border-right: none;
+}
+
+.data-table thead th {
+    border-bottom: 2px solid rgba(0, 255, 136, 0.3);
+}
+
+.data-table tbody tr:hover td {
+    border-bottom-color: rgba(0, 255, 136, 0.3);
+}
+
+/* Clickable table rows */
+.data-table tbody tr {
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.data-table tbody tr:hover {
+    background-color: rgba(0, 255, 136, 0.1);
 } 

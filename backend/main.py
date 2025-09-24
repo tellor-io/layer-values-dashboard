@@ -1599,22 +1599,6 @@ async def serve_frontend():
     
     return HTMLResponse(content=html_content)
 
-@dashboard_app.get("/reporters")
-async def serve_reporters_page():
-    """Serve the reporters page"""
-    html_path = Path("../frontend/reporters.html")
-    if not html_path.exists():
-        raise HTTPException(status_code=404, detail="Reporters page not found")
-    
-    # Read the HTML content and update asset paths
-    with open(html_path, 'r', encoding='utf-8') as f:
-        html_content = f.read()
-    
-    # Update static asset paths to be relative to instance-specific mount path
-    html_content = html_content.replace('href="./static/', f'href="{MOUNT_PATH}/static/')
-    html_content = html_content.replace('src="./static/', f'src="{MOUNT_PATH}/static/')
-    
-    return HTMLResponse(content=html_content)
 
 # API routes for dashboard
 @dashboard_app.get("/api/info")
@@ -2145,7 +2129,12 @@ async def get_analytics(
                     count = result[1]
                     break
             
-            time_label = pd.to_datetime(bucket_start, unit='ms').strftime('%H:%M' if timeframe == '24h' else '%m/%d')
+            if timeframe == '24h':
+                time_label = pd.to_datetime(bucket_start, unit='ms').strftime('%H:%M')
+            elif timeframe == '7d':
+                time_label = pd.to_datetime(bucket_start, unit='ms').strftime('%m/%d %H:%M')
+            else:  # 30d
+                time_label = pd.to_datetime(bucket_start, unit='ms').strftime('%m/%d')
             buckets.append({
                 "time": bucket_start,
                 "time_label": time_label,
@@ -2458,6 +2447,8 @@ async def get_query_analytics(
                 
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d %H:%M'))
                 elif timeframe == "30d":
                     time_labels.append(dt.strftime('%m/%d'))
             
@@ -2487,7 +2478,7 @@ async def get_query_analytics(
 
 @dashboard_app.get("/api/reporter-analytics")
 async def get_reporter_analytics(
-    timeframe: str = Query(..., regex="^(24h|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get analytics data by reporter for different timeframes"""
     try:
@@ -2508,6 +2499,14 @@ async def get_reporter_analytics(
                 interval_ms = 30 * 60 * 1000  # 30 minutes
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
+                
+            elif timeframe == "7d":
+                logger.info("📊 Processing 7d reporter analytics...")
+                # 4-hour intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 4 * 60 * 60 * 1000  # 4 hours
+                num_buckets = 42
+                start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d reporter analytics...")
@@ -2548,10 +2547,20 @@ async def get_reporter_analytics(
             
             for reporter_row in top_reporters:
                 reporter = reporter_row[0]
+                
+                # Get moniker from reporters table if available
+                moniker_result = conn.execute("""
+                    SELECT moniker FROM reporters WHERE address = ?
+                """, [reporter]).fetchone()
+                
+                display_name = reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                if moniker_result and moniker_result[0]:
+                    display_name = moniker_result[0]
+                
                 reporter_list.append({
                     "address": reporter,
                     "total_count": reporter_row[1],
-                    "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                    "short_name": display_name
                 })
                 
                 # Get bucketed data for this reporter
@@ -2596,6 +2605,8 @@ async def get_reporter_analytics(
                 
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d %H:%M'))
                 elif timeframe == "30d":
                     time_labels.append(dt.strftime('%m/%d'))
             
@@ -2808,20 +2819,39 @@ async def get_reporter_power_analytics(
                 if query_id and len(row) >= 4:
                     # With query ID filtering, we have VALUE and TRUSTED_VALUE
                     reporter, power, value, trusted_value = row[:4]
+                    # Get moniker from reporters table if available
+                    moniker_result = conn.execute("""
+                        SELECT moniker FROM reporters WHERE address = ?
+                    """, [reporter]).fetchone()
+                    
+                    display_name = reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                    if moniker_result and moniker_result[0]:
+                        display_name = moniker_result[0]
+                    
                     power_distribution.append({
                         "reporter": reporter,
                         "power": power,
                         "value": value,
                         "trusted_value": trusted_value,
-                        "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                        "short_name": display_name
                     })
                 else:
                     # Overall view, just reporter and power
                     reporter, power = row[:2]
+                    
+                    # Get moniker from reporters table if available
+                    moniker_result = conn.execute("""
+                        SELECT moniker FROM reporters WHERE address = ?
+                    """, [reporter]).fetchone()
+                    
+                    display_name = reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                    if moniker_result and moniker_result[0]:
+                        display_name = moniker_result[0]
+                    
                     power_distribution.append({
                         "reporter": reporter,
                         "power": power,
-                        "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                        "short_name": display_name
                     })
                 total_power += power
             
@@ -2855,9 +2885,18 @@ async def get_reporter_power_analytics(
                     """, [reporter]).fetchone()
                     
                     if last_report:
+                        # Get moniker from reporters table if available
+                        moniker_result = conn.execute("""
+                            SELECT moniker FROM reporters WHERE address = ?
+                        """, [reporter]).fetchone()
+                        
+                        display_name = reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                        if moniker_result and moniker_result[0]:
+                            display_name = moniker_result[0]
+                        
                         absent_reporters.append({
                             "reporter": reporter,
-                            "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter,
+                            "short_name": display_name,
                             "last_power": last_report[0],
                             "last_report_time": last_report[1]
                         })
@@ -3012,6 +3051,8 @@ async def get_agreement_analytics(
                 
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d %H:%M'))
                 elif timeframe == "30d":
                     time_labels.append(dt.strftime('%m/%d'))
             
@@ -3224,7 +3265,7 @@ async def get_reporter_detail(address: str):
 @dashboard_app.get("/api/reporters-activity-analytics")
 async def get_reporters_activity_analytics(
     request: Request,
-    timeframe: str = Query(..., regex="^(24h|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get total reports by active reporters analytics data for different timeframes"""
     try:
@@ -3248,6 +3289,14 @@ async def get_reporters_activity_analytics(
                 interval_ms = 30 * 60 * 1000  # 30 minutes
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
+                
+            elif timeframe == "7d":
+                logger.info("📊 Processing 7d reporter activity analytics...")
+                # 4-hour intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 4 * 60 * 60 * 1000  # 4 hours
+                num_buckets = 42
+                start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d reporter activity analytics...")
@@ -3337,7 +3386,6 @@ async def get_reporters_activity_analytics(
             
             # Create arrays efficiently using list comprehension
             total_reports_data = [row[2] for row in results]
-            active_reporters_data = [row[1] for row in results]
             representative_power_of_aggr_data = [row[3] for row in results]
             
             # Generate time labels efficiently
@@ -3347,6 +3395,8 @@ async def get_reporters_activity_analytics(
                 dt = pd.to_datetime(bucket_start, unit='ms')
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d %H:%M'))
                 elif timeframe == "30d":
                     time_labels.append(dt.strftime('%m/%d'))
             
@@ -3359,7 +3409,6 @@ async def get_reporters_activity_analytics(
                 "title": f"Reporter Activity (Past {timeframe})",
                 "time_labels": time_labels,
                 "total_reports": total_reports_data,
-                "active_reporters": active_reporters_data,
                 "representative_power_of_aggr": representative_power_of_aggr_data,
                 "maximal_power_network": maximal_power_data,
                 "has_maximal_power_data": any(power > 0 for power in maximal_power_data)
