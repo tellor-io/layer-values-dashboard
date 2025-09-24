@@ -1599,22 +1599,6 @@ async def serve_frontend():
     
     return HTMLResponse(content=html_content)
 
-@dashboard_app.get("/reporters")
-async def serve_reporters_page():
-    """Serve the reporters page"""
-    html_path = Path("../frontend/reporters.html")
-    if not html_path.exists():
-        raise HTTPException(status_code=404, detail="Reporters page not found")
-    
-    # Read the HTML content and update asset paths
-    with open(html_path, 'r', encoding='utf-8') as f:
-        html_content = f.read()
-    
-    # Update static asset paths to be relative to instance-specific mount path
-    html_content = html_content.replace('href="./static/', f'href="{MOUNT_PATH}/static/')
-    html_content = html_content.replace('src="./static/', f'src="{MOUNT_PATH}/static/')
-    
-    return HTMLResponse(content=html_content)
 
 # API routes for dashboard
 @dashboard_app.get("/api/info")
@@ -2548,10 +2532,20 @@ async def get_reporter_analytics(
             
             for reporter_row in top_reporters:
                 reporter = reporter_row[0]
+                
+                # Get moniker from reporters table if available
+                moniker_result = conn.execute("""
+                    SELECT moniker FROM reporters WHERE address = ?
+                """, [reporter]).fetchone()
+                
+                display_name = reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                if moniker_result and moniker_result[0]:
+                    display_name = moniker_result[0]
+                
                 reporter_list.append({
                     "address": reporter,
                     "total_count": reporter_row[1],
-                    "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                    "short_name": display_name
                 })
                 
                 # Get bucketed data for this reporter
@@ -2808,20 +2802,39 @@ async def get_reporter_power_analytics(
                 if query_id and len(row) >= 4:
                     # With query ID filtering, we have VALUE and TRUSTED_VALUE
                     reporter, power, value, trusted_value = row[:4]
+                    # Get moniker from reporters table if available
+                    moniker_result = conn.execute("""
+                        SELECT moniker FROM reporters WHERE address = ?
+                    """, [reporter]).fetchone()
+                    
+                    display_name = reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                    if moniker_result and moniker_result[0]:
+                        display_name = moniker_result[0]
+                    
                     power_distribution.append({
                         "reporter": reporter,
                         "power": power,
                         "value": value,
                         "trusted_value": trusted_value,
-                        "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                        "short_name": display_name
                     })
                 else:
                     # Overall view, just reporter and power
                     reporter, power = row[:2]
+                    
+                    # Get moniker from reporters table if available
+                    moniker_result = conn.execute("""
+                        SELECT moniker FROM reporters WHERE address = ?
+                    """, [reporter]).fetchone()
+                    
+                    display_name = reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                    if moniker_result and moniker_result[0]:
+                        display_name = moniker_result[0]
+                    
                     power_distribution.append({
                         "reporter": reporter,
                         "power": power,
-                        "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                        "short_name": display_name
                     })
                 total_power += power
             
@@ -2855,9 +2868,18 @@ async def get_reporter_power_analytics(
                     """, [reporter]).fetchone()
                     
                     if last_report:
+                        # Get moniker from reporters table if available
+                        moniker_result = conn.execute("""
+                            SELECT moniker FROM reporters WHERE address = ?
+                        """, [reporter]).fetchone()
+                        
+                        display_name = reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter
+                        if moniker_result and moniker_result[0]:
+                            display_name = moniker_result[0]
+                        
                         absent_reporters.append({
                             "reporter": reporter,
-                            "short_name": reporter[:8] + "..." + reporter[-6:] if len(reporter) > 20 else reporter,
+                            "short_name": display_name,
                             "last_power": last_report[0],
                             "last_report_time": last_report[1]
                         })

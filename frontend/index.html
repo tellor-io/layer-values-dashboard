@@ -16,14 +16,14 @@
             <!-- Stats Dashboard -->
             <div class="stats-dashboard">
                 <div class="stats-grid">
-                    <div class="stat-card clickable" id="unique-reporters-card">
+                    <div class="stat-card" id="unique-reporters-card">
                         <div class="stat-icon">
                             <i class="fas fa-users"></i>
                         </div>
                         <div class="stat-content">
                             <div class="stat-number" id="unique-reporters">-</div>
                             <div class="stat-title">Unique Reporters</div>
-                            <div class="stat-subtitle">Click to view analytics</div>
+                            <div class="stat-subtitle">Active in reporting</div>
                         </div>
                     </div>
                     <div class="stat-card clickable" id="query-ids-card">
@@ -92,6 +92,67 @@
                 </div>
             </div>
 
+            <!-- Reporter Activity Chart -->
+            <div class="analytics-section">
+                <div class="analytics-controls">
+                    <button class="analytics-btn active" data-timeframe="24h">
+                        <i class="fas fa-clock"></i> 24h
+                    </button>
+                    <button class="analytics-btn" data-timeframe="30d">
+                        <i class="fas fa-calendar"></i> 30d
+                    </button>
+                </div>
+                <div class="chart-container">
+                    <canvas id="reporter-activity-chart"></canvas>
+                </div>
+                <div class="analytics-header">
+                    <h2>
+                        <i class="fas fa-chart-line"></i>
+                        Tellor Reporter Activity
+                    </h2>
+                </div>
+                <div class="analytics-loading" id="reporter-activity-loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <div class="loading-text">Loading reporter activity...</div>
+                </div>
+            </div>
+
+            <!-- Reporter Stats Dashboard -->
+            <div class="stats-dashboard">
+                <div class="stats-grid" id="reporterSummaryCards">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="totalReportersCard">-</div>
+                            <div class="stat-title">Total Reporters</div>
+                            <div class="stat-subtitle">All registered reporters</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-bolt"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="activeReporters">-</div>
+                            <div class="stat-title">Active Reporters</div>
+                            <div class="stat-subtitle">Active in last 24h</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-ban"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-number" id="jailedReporters">-</div>
+                            <div class="stat-title">Jailed Reporters</div>
+                            <div class="stat-subtitle">Currently jailed</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Header Search for redirecting to search page -->
             <div class="search-section">
                 <div class="header-search-container">
@@ -115,11 +176,87 @@
                         <button id="header-search-btn" class="btn btn-primary">Search</button>
                         <span class="experimental-label">(search is currently experimental)</span>
                     </div>
-                    <div class="search-links">
-                        <a href="#" id="reporters-link" class="btn btn-secondary">
-                            <i class="fas fa-users"></i> View Reporters
-                        </a>
+                </div>
+            </div>
+
+            <!-- Reports by Reporter Analytics Section -->
+            <div class="analytics-section">
+                <div class="analytics-header">
+                    <h2>
+                        <i class="fas fa-chart-line"></i>
+                        Reports by Reporter
+                    </h2>
+                </div>
+                <div class="analytics-controls">
+                    <button class="analytics-btn active" data-timeframe="24h" data-analytics-type="reporter">
+                        <i class="fas fa-clock"></i> 24h
+                    </button>
+                    <button class="analytics-btn" data-timeframe="30d" data-analytics-type="reporter">
+                        <i class="fas fa-calendar"></i> 30d
+                    </button>
+                </div>
+                <div class="chart-container">
+                    <canvas id="reporter-analytics-chart"></canvas>
+                </div>
+                <div class="reporter-legend" id="reporter-legend">
+                    <!-- Legend will be populated here -->
+                </div>
+                <div class="analytics-loading" id="reporter-analytics-loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <div class="loading-text">Loading reporter analytics...</div>
+                </div>
+            </div>
+
+            <!-- Data Section -->
+            <div class="data-section">
+                <div class="data-header">
+                    <div class="data-header-left">
+                        <h2>
+                            <i class="fas fa-table"></i>
+                            Reporter Details
+                        </h2>
+                        <div class="header-stats">
+                            <div class="stat-item">
+                                <span class="stat-value" id="showing-info">0 of 0 reporters</span>
+                            </div>
+                        </div>
                     </div>
+                </div>
+
+                <div class="table-container">
+                    <table class="data-table" id="reportersTable">
+                        <thead>
+                            <tr>
+                                <th>Reporter</th>
+                                <th>Power</th>
+                                <th>Commission</th>
+                                <th>Jailed Status</th>
+                                <th>Active Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reportersTableBody">
+                            <tr>
+                                <td colspan="6" class="text-center">
+                                    <div class="loading">
+                                        <i class="fas fa-spinner fa-spin"></i> Loading reporters...
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="pagination">
+                    <button id="prev-page" class="btn btn-secondary" disabled>
+                        <i class="fas fa-chevron-left"></i> Previous
+                    </button>
+                    <div class="page-info">
+                        <span>Page <span id="current-page">1</span> of <span id="total-pages">1</span></span>
+                    </div>
+                    <button id="next-page" class="btn btn-secondary">
+                        Next <i class="fas fa-chevron-right"></i>
+                    </button>
                 </div>
             </div>
 
