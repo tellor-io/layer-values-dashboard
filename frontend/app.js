@@ -1891,7 +1891,7 @@ class ReportersManager {
             console.error('Error loading reporters:', error);
             tableBody.innerHTML = `
                 <tr>
-                    <td colspan="6" class="text-center">
+                    <td colspan="5" class="text-center">
                         <div class="error">
                             <i class="fas fa-exclamation-triangle"></i> Error loading reporters. Please try again.
                         </div>
@@ -1909,7 +1909,7 @@ class ReportersManager {
         if (reporters.length === 0) {
             tableBody.innerHTML = `
                 <tr>
-                    <td colspan="6" class="text-center">
+                    <td colspan="5" class="text-center">
                         <div class="loading">No reporters found.</div>
                     </td>
                 </tr>
@@ -1928,7 +1928,7 @@ class ReportersManager {
             const activeText = reporter.active_24h ? 'Active' : 'Inactive';
             
             return `
-                <tr>
+                <tr data-reporter-address="${this.escapeHtml(reporter.address)}" class="reporter-row">
                     <td>
                         <div class="reporter">
                             <div class="reporter-moniker font-bold text-green">${this.escapeHtml(reporter.moniker || 'Unknown')}</div>
@@ -1952,16 +1952,22 @@ class ReportersManager {
                     <td>
                         <span class="badge ${activeClass}">${activeText}</span>
                     </td>
-                    <td>
-                        <button onclick="reportersManager.viewReporter('${reporter.address}')" class="action-btn">
-                            <i class="fas fa-eye"></i> View
-                        </button>
-                    </td>
                 </tr>
             `;
         }).join('');
         
         tableBody.innerHTML = html;
+        
+        // Add click event listeners to rows
+        const reporterRows = tableBody.querySelectorAll('.reporter-row');
+        reporterRows.forEach(row => {
+            row.addEventListener('click', () => {
+                const address = row.getAttribute('data-reporter-address');
+                if (address) {
+                    this.viewReporter(address);
+                }
+            });
+        });
     }
     
     updatePaginationControls() {

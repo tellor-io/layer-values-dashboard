@@ -290,6 +290,16 @@
         .data-table tbody tr:hover td {
             border-bottom-color: rgba(0, 255, 136, 0.3);
         }
+        
+        /* Clickable table rows */
+        .data-table tbody tr {
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        
+        .data-table tbody tr:hover {
+            background-color: rgba(0, 255, 136, 0.1);
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -475,12 +485,11 @@
                                 <th>Commission</th>
                                 <th>Jailed Status</th>
                                 <th>Active Status</th>
-                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="reportersTableBody">
                             <tr>
-                                <td colspan="6" class="text-center">
+                                <td colspan="5" class="text-center">
                                     <div class="loading">
                                         <i class="fas fa-spinner fa-spin"></i> Loading reporters...
                                     </div>

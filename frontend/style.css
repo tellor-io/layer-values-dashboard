@@ -1947,4 +1947,14 @@ body {
 
 .data-table tbody tr:hover td {
     border-bottom-color: rgba(0, 255, 136, 0.3);
+}
+
+/* Clickable table rows */
+.data-table tbody tr {
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.data-table tbody tr:hover {
+    background-color: rgba(0, 255, 136, 0.1);
 } 
