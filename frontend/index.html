@@ -7,6 +7,290 @@
     <link rel="stylesheet" href="./static/style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        /* Tab and controls row layout */
+        .tab-and-controls-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #333344;
+            padding-bottom: 10px;
+            gap: 20px;
+        }
+        
+        /* Tab navigation styles */
+        .tab-navigation {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .tab-btn {
+            background: #1a1a2e;
+            border: 2px solid #333344;
+            color: #00d4ff;
+            padding: 10px 20px;
+            border-radius: 8px 8px 0 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+        
+        .tab-btn:hover {
+            background: #333344;
+            border-color: #00d4ff;
+        }
+        
+        .tab-btn.active {
+            background: #00d4ff;
+            color: #1a1a2e;
+            border-color: #00d4ff;
+        }
+        
+        /* Timeframe controls styles */
+        .timeframe-controls {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .timeframe-controls .analytics-btn {
+            background: #333344;
+            border: 1px solid #555;
+            color: #00d4ff;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+            font-size: 14px;
+        }
+        
+        .timeframe-controls .analytics-btn:hover {
+            background: #555;
+            border-color: #00d4ff;
+        }
+        
+        .timeframe-controls .analytics-btn.active {
+            background: #00ff88;
+            color: #1a1a2e;
+            border-color: #00ff88;
+        }
+        
+        /* Tab content styles */
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Responsive design for smaller screens */
+        @media (max-width: 768px) {
+            .tab-and-controls-row {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 15px;
+            }
+            
+            .tab-navigation {
+                justify-content: center;
+            }
+            
+            .timeframe-controls {
+                justify-content: center;
+            }
+        }
+        
+        /* Improved pagination styles */
+        .pagination-improved {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 20px;
+            padding: 15px 0;
+        }
+        
+        .btn-pagination {
+            background: linear-gradient(135deg, #333344, #444455);
+            border: 1px solid #555566;
+            color: #00ff88;
+            border-radius: 6px;
+            padding: 8px 12px;
+            min-width: 40px;
+            height: 36px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+        
+        .btn-pagination:hover:not(:disabled) {
+            background: linear-gradient(135deg, #444455, #555566);
+            border-color: #00ff88;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0, 255, 136, 0.2);
+        }
+        
+        .btn-pagination:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: #2a2a3a;
+            border-color: #3a3a4a;
+            color: #666;
+        }
+        
+        .page-info-improved {
+            color: #00ff88;
+            font-weight: 500;
+            font-size: 14px;
+            min-width: 120px;
+            text-align: center;
+        }
+        
+        .page-info-improved span {
+            font-weight: 600;
+        }
+        
+        /* Mobile responsive adjustments */
+        @media (max-width: 768px) {
+            .pagination-improved {
+                gap: 10px;
+                margin-top: 15px;
+                padding: 10px 0;
+            }
+            
+            .btn-pagination {
+                min-width: 36px;
+                height: 32px;
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+            
+            .page-info-improved {
+                font-size: 12px;
+                min-width: 100px;
+            }
+        }
+        
+        /* Compact search card styles */
+        .search-card {
+            background: linear-gradient(135deg, #2a2a3a, #3a3a4a) !important;
+            border: 1px solid #555566 !important;
+        }
+        
+        .compact-search-container {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+            width: 100%;
+        }
+        
+        .compact-search-input {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid #555566;
+            border-radius: 4px;
+            padding: 6px 10px;
+            color: #fff;
+            font-size: 12px;
+            min-width: 0;
+        }
+        
+        .compact-search-input::placeholder {
+            color: #999;
+        }
+        
+        .compact-search-input:focus {
+            outline: none;
+            border-color: #00ff88;
+            box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.2);
+        }
+        
+        .compact-search-btn {
+            background: linear-gradient(135deg, #00ff88, #00cc6a);
+            border: none;
+            border-radius: 4px;
+            padding: 6px 10px;
+            color: #000;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 12px;
+            min-width: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .compact-search-btn:hover {
+            background: linear-gradient(135deg, #00cc6a, #00aa55);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0, 255, 136, 0.3);
+        }
+        
+        .experimental-note {
+            color: #ff6b6b !important;
+            font-size: 10px !important;
+        }
+        
+        /* Mobile adjustments for search card */
+        @media (max-width: 768px) {
+            .compact-search-container {
+                gap: 6px;
+            }
+            
+            .compact-search-input {
+                font-size: 11px;
+                padding: 5px 8px;
+            }
+            
+            .compact-search-btn {
+                font-size: 11px;
+                padding: 5px 8px;
+                min-width: 28px;
+            }
+        }
+        
+        /* Enhanced table styling with separating lines */
+        .data-table {
+            border-collapse: separate;
+            border-spacing: 8px 0;
+        }
+        
+        .data-table th,
+        .data-table td {
+            border-right: 1px solid rgba(85, 85, 102, 0.3);
+            border-bottom: 1px solid rgba(85, 85, 102, 0.2);
+            padding-left: 8px;
+            padding-right: 8px;
+        }
+        
+        .data-table th:last-child,
+        .data-table td:last-child {
+            border-right: none;
+        }
+        
+        .data-table thead th {
+            border-bottom: 2px solid rgba(0, 255, 136, 0.3);
+        }
+        
+        .data-table tbody tr:hover td {
+            border-bottom-color: rgba(0, 255, 136, 0.3);
+        }
+    </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -89,123 +373,87 @@
                             <div class="stat-subtitle">Sum of TRB Staked for Reporting</div>
                         </div>
                     </div>
-                </div>
-            </div>
-
-            <!-- Reporter Activity Chart -->
-            <div class="analytics-section">
-                <div class="analytics-controls">
-                    <button class="analytics-btn active" data-timeframe="24h">
-                        <i class="fas fa-clock"></i> 24h
-                    </button>
-                    <button class="analytics-btn" data-timeframe="30d">
-                        <i class="fas fa-calendar"></i> 30d
-                    </button>
-                </div>
-                <div class="chart-container">
-                    <canvas id="reporter-activity-chart"></canvas>
-                </div>
-                <div class="analytics-header">
-                    <h2>
-                        <i class="fas fa-chart-line"></i>
-                        Tellor Reporter Activity
-                    </h2>
-                </div>
-                <div class="analytics-loading" id="reporter-activity-loading" style="display: none;">
-                    <div class="spinner"></div>
-                    <div class="loading-text">Loading reporter activity...</div>
-                </div>
-            </div>
-
-            <!-- Reporter Stats Dashboard -->
-            <div class="stats-dashboard">
-                <div class="stats-grid" id="reporterSummaryCards">
-                    <div class="stat-card">
+                    
+                    <!-- Compact Search Card -->
+                    <div class="stat-card search-card">
                         <div class="stat-icon">
-                            <i class="fas fa-users"></i>
+                            <i class="fas fa-search"></i>
                         </div>
                         <div class="stat-content">
-                            <div class="stat-number" id="totalReportersCard">-</div>
-                            <div class="stat-title">Total Reporters</div>
-                            <div class="stat-subtitle">All registered reporters</div>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-icon">
-                            <i class="fas fa-bolt"></i>
-                        </div>
-                        <div class="stat-content">
-                            <div class="stat-number" id="activeReporters">-</div>
-                            <div class="stat-title">Active Reporters</div>
-                            <div class="stat-subtitle">Active in last 24h</div>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-icon">
-                            <i class="fas fa-ban"></i>
-                        </div>
-                        <div class="stat-content">
-                            <div class="stat-number" id="jailedReporters">-</div>
-                            <div class="stat-title">Jailed Reporters</div>
-                            <div class="stat-subtitle">Currently jailed</div>
+                            <div class="compact-search-container">
+                                <input type="text" id="header-search-input" placeholder="Search Tellor data..." class="compact-search-input">
+                                <button id="header-search-btn" class="compact-search-btn">
+                                    <i class="fas fa-search"></i>
+                                </button>
+                            </div>
+                            <div class="stat-title">Search Data</div>
+                            <div class="stat-subtitle experimental-note">Experimental feature</div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Header Search for redirecting to search page -->
-            <div class="search-section">
-                <div class="header-search-container">
-                    <h2>
-                        <i class="fas fa-search"></i>
-                        Search Tellor Data
-                    </h2>
-                    <div class="search-info">
-                        <div class="stat-item">
-                            <span class="stat-label">Total Records Available</span>
-                            <span class="stat-value" id="total-records">-</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Last Updated</span>
-                            <span class="stat-value" id="load-timestamp">Loading...</span>
-                        </div>
-                    </div>
-                    <div class="header-search-box">
-                        <i class="fas fa-search"></i>
-                        <input type="text" id="header-search-input" placeholder="Search anything in the data...">
-                        <button id="header-search-btn" class="btn btn-primary">Search</button>
-                        <span class="experimental-label">(search is currently experimental)</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Reports by Reporter Analytics Section -->
+            <!-- Reporter Activity Tabbed Container -->
             <div class="analytics-section">
                 <div class="analytics-header">
                     <h2>
                         <i class="fas fa-chart-line"></i>
-                        Reports by Reporter
+                        Reporter Activity
                     </h2>
                 </div>
-                <div class="analytics-controls">
-                    <button class="analytics-btn active" data-timeframe="24h" data-analytics-type="reporter">
-                        <i class="fas fa-clock"></i> 24h
-                    </button>
-                    <button class="analytics-btn" data-timeframe="30d" data-analytics-type="reporter">
-                        <i class="fas fa-calendar"></i> 30d
-                    </button>
+                
+                <!-- Combined Tab Navigation and Controls -->
+                <div class="tab-and-controls-row">
+                    <!-- Tab Navigation -->
+                    <div class="tab-navigation">
+                        <button class="tab-btn active" data-tab="activity-overview">
+                            <i class="fas fa-chart-area"></i> Activity Overview
+                        </button>
+                        <button class="tab-btn" data-tab="individual-reporters">
+                            <i class="fas fa-users"></i> Individual Reporters
+                        </button>
+                    </div>
+                    
+                    <!-- Timeframe Controls -->
+                    <div class="timeframe-controls">
+                        <button class="analytics-btn active" data-timeframe="24h">
+                            <i class="fas fa-clock"></i> 24h
+                        </button>
+                        <button class="analytics-btn" data-timeframe="7d">
+                            <i class="fas fa-calendar-week"></i> 7d
+                        </button>
+                        <button class="analytics-btn" data-timeframe="30d">
+                            <i class="fas fa-calendar"></i> 30d
+                        </button>
+                    </div>
                 </div>
-                <div class="chart-container">
-                    <canvas id="reporter-analytics-chart"></canvas>
+                
+                <!-- Tab Content: Activity Overview -->
+                <div class="tab-content active" id="activity-overview">
+                    <div class="chart-container">
+                        <canvas id="reporter-activity-chart"></canvas>
+                    </div>
+                    <div class="analytics-loading" id="reporter-activity-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Loading reporter activity...</div>
+                    </div>
                 </div>
-                <div class="reporter-legend" id="reporter-legend">
-                    <!-- Legend will be populated here -->
-                </div>
-                <div class="analytics-loading" id="reporter-analytics-loading" style="display: none;">
-                    <div class="spinner"></div>
-                    <div class="loading-text">Loading reporter analytics...</div>
+                
+                <!-- Tab Content: Individual Reporters -->
+                <div class="tab-content" id="individual-reporters">
+                    <div class="chart-container">
+                        <canvas id="reporter-analytics-chart"></canvas>
+                    </div>
+                    <div class="reporter-legend" id="reporter-legend">
+                        <!-- Legend will be populated here -->
+                    </div>
+                    <div class="analytics-loading" id="reporter-analytics-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Loading reporter analytics...</div>
+                    </div>
                 </div>
             </div>
+
 
             <!-- Data Section -->
             <div class="data-section">
@@ -215,11 +463,6 @@
                             <i class="fas fa-table"></i>
                             Reporter Details
                         </h2>
-                        <div class="header-stats">
-                            <div class="stat-item">
-                                <span class="stat-value" id="showing-info">0 of 0 reporters</span>
-                            </div>
-                        </div>
                     </div>
                 </div>
 
@@ -247,15 +490,15 @@
                     </table>
                 </div>
 
-                <div class="pagination">
-                    <button id="prev-page" class="btn btn-secondary" disabled>
-                        <i class="fas fa-chevron-left"></i> Previous
+                <div class="pagination-improved">
+                    <button id="prev-page" class="btn-pagination" disabled>
+                        <i class="fas fa-chevron-left"></i>
                     </button>
-                    <div class="page-info">
+                    <div class="page-info-improved">
                         <span>Page <span id="current-page">1</span> of <span id="total-pages">1</span></span>
                     </div>
-                    <button id="next-page" class="btn btn-secondary">
-                        Next <i class="fas fa-chevron-right"></i>
+                    <button id="next-page" class="btn-pagination">
+                        <i class="fas fa-chevron-right"></i>
                     </button>
                 </div>
             </div>

@@ -72,10 +72,6 @@ const getFullQueryId = (queryId) => {
 
 // DOM elements
 const elements = {
-    // Header stats
-    totalRecords: document.getElementById('total-records'),
-    loadTimestamp: document.getElementById('load-timestamp'),
-    
     // Stats cards
     uniqueReporters: document.getElementById('unique-reporters'),
     uniqueReportersCard: document.getElementById('unique-reporters-card'),
@@ -151,9 +147,6 @@ const elements = {
     agreementLegend: document.getElementById('agreement-legend'),
     
     // Reporter section elements
-    totalReportersCard: document.getElementById('totalReportersCard'),
-    activeReporters: document.getElementById('activeReporters'),
-    jailedReporters: document.getElementById('jailedReporters'),
     reportersTable: document.getElementById('reportersTable'),
     reportersTableBody: document.getElementById('reportersTableBody'),
     showingInfo: document.getElementById('showing-info'),
@@ -248,7 +241,7 @@ const updateLoadTime = () => {
         minute: '2-digit',
         second: '2-digit'
     });
-    elements.loadTimestamp.textContent = timeString;
+    // Load timestamp display removed - now compact search only
 };
 
 // Enhanced API call with cellular optimizations
@@ -406,10 +399,10 @@ const loadStats = async (forceRefresh = false) => {
     // Load core info - this should almost never fail
     try {
         info = await apiCall('/info', {}, MAX_RETRIES, forceRefresh);
-        elements.totalRecords.textContent = formatNumber(info.total_rows);
+        // Total records display removed - now compact search only
     } catch (error) {
         console.error('Failed to load info:', error);
-        elements.totalRecords.textContent = 'Error';
+        // Total records display removed - now compact search only
     }
     
     // Load stats - this is critical for dashboard functionality
@@ -721,24 +714,6 @@ const createAnalyticsChart = (data) => {
         yAxisID: 'y'
     }];
     
-    // Add active reporters dataset
-    if (data.active_reporters) {
-        datasets.push({
-            label: 'Active Reporters',
-            data: data.active_reporters,
-            borderColor: '#00d4ff',
-            backgroundColor: 'rgba(0, 212, 255, 0.1)',
-            borderWidth: 2,
-            fill: false,
-            tension: 0,
-            pointBackgroundColor: '#00d4ff',
-            pointBorderColor: '#000',
-            pointBorderWidth: 1,
-            pointRadius: 4,
-            pointHoverRadius: 6,
-            yAxisID: 'y'
-        });
-    }
     
     // Add representative power dataset if available
     if (data.representative_power_of_aggr) {
@@ -859,7 +834,7 @@ const createAnalyticsChart = (data) => {
                     },
                     title: {
                         display: true,
-                        text: 'Reports & Active Reporters',
+                        text: 'Total Reports',
                         color: '#00ff88'
                     }
                 },
@@ -1866,23 +1841,12 @@ class ReportersManager {
         try {
             const data = await apiCall('/reporters-summary');
             
-            // Update stat cards
-            if (elements.totalReportersCard) {
-                elements.totalReportersCard.textContent = data.summary.total_reporters.toLocaleString();
-            }
-            if (elements.activeReporters) {
-                elements.activeReporters.textContent = data.summary.active_reporters.toLocaleString();
-            }
-            if (elements.jailedReporters) {
-                elements.jailedReporters.textContent = data.summary.jailed_reporters.toLocaleString();
-            }
+            // Stat cards removed - summary data still loaded for other purposes
             
             this.maxPower = data.summary.max_power;
         } catch (error) {
             console.error('Error loading reporters summary:', error);
-            if (elements.totalReportersCard) elements.totalReportersCard.textContent = 'Error';
-            if (elements.activeReporters) elements.activeReporters.textContent = 'Error';
-            if (elements.jailedReporters) elements.jailedReporters.textContent = 'Error';
+            // Stat cards removed - error handling simplified
         }
     }
     
@@ -2019,8 +1983,8 @@ class ReportersManager {
     }
     
     viewReporter(address) {
-        // For now, just alert the address. Could be expanded to show a modal or navigate to detail page.
-        alert(`Reporter details for: ${address}\n\nThis could open a detailed view in a future update.`);
+        // Redirect to search page with the reporter's address as the search query
+        window.location.href = `${API_BASE}/search?q=${encodeURIComponent(address)}`;
     }
     
     async loadReporterActivityAnalytics(timeframe) {
@@ -2099,8 +2063,7 @@ class ReportersManager {
             // Update data efficiently without recreating chart
             this.reporterActivityChart.data.labels = data.time_labels;
             this.reporterActivityChart.data.datasets[0].data = data.total_reports;
-            this.reporterActivityChart.data.datasets[1].data = data.active_reporters;
-            this.reporterActivityChart.data.datasets[2].data = [...data.representative_power_of_aggr];
+            this.reporterActivityChart.data.datasets[1].data = [...data.representative_power_of_aggr];
             this.reporterActivityChart.update('none'); // No animation for faster updates
             return;
         }
@@ -2140,21 +2103,6 @@ class ReportersManager {
                 fill: true,
                 tension: 0.1,
                 pointBackgroundColor: '#00ff88',
-                pointBorderColor: '#000',
-                pointBorderWidth: 1,
-                pointRadius: pointRadius,
-                pointHoverRadius: hoverRadius,
-                yAxisID: 'y'
-            },
-            {
-                label: 'Active Reporters',
-                data: data.active_reporters,
-                borderColor: '#00d4ff',
-                backgroundColor: 'rgba(0, 212, 255, 0.1)',
-                borderWidth: borderWidthMain,
-                fill: false,
-                tension: 0.1,
-                pointBackgroundColor: '#00d4ff',
                 pointBorderColor: '#000',
                 pointBorderWidth: 1,
                 pointRadius: pointRadius,
@@ -2277,7 +2225,7 @@ class ReportersManager {
                         },
                         title: {
                             display: true,
-                            text: 'Reports / Reporters',
+                            text: 'Total Reports',
                             color: '#00d4ff'
                         }
                     },
@@ -2390,6 +2338,36 @@ class ReportersManager {
 // Create global reporters manager instance
 const reportersManager = new ReportersManager();
 
+// Tab functionality
+function initializeTabs() {
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+    
+    tabButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const targetTab = btn.dataset.tab;
+            
+            // Remove active class from all buttons and contents
+            tabButtons.forEach(b => b.classList.remove('active'));
+            tabContents.forEach(content => content.classList.remove('active'));
+            
+            // Add active class to clicked button and corresponding content
+            btn.classList.add('active');
+            document.getElementById(targetTab).classList.add('active');
+            
+            // Get the currently active timeframe
+            const activeTimeframe = document.querySelector('.timeframe-controls .analytics-btn.active').dataset.timeframe;
+            
+            // Initialize chart for the active tab with current timeframe
+            if (targetTab === 'activity-overview') {
+                reportersManager.loadReporterActivityAnalytics(activeTimeframe);
+            } else if (targetTab === 'individual-reporters') {
+                loadReporterAnalytics(activeTimeframe);
+            }
+        });
+    });
+}
+
 // Event listeners
 document.addEventListener('DOMContentLoaded', async () => {
     // Set and display load time
@@ -2407,8 +2385,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initialize reporters functionality
     await reportersManager.initialize();
     
-    // Initialize reporter analytics chart (always visible)
-    await loadReporterAnalytics('24h');
+    // Initialize tab functionality
+    initializeTabs();
+    
+    // Initialize charts in the active tab
+    await reportersManager.loadReporterActivityAnalytics('24h'); // Activity Overview tab (default active)
+    await loadReporterAnalytics('24h'); // Preload Individual Reporters tab
     
     // Analytics card click
     elements.recentActivityCard.addEventListener('click', showAnalyticsModal);
@@ -2491,14 +2473,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
     
-    // Reporter Analytics timeframe buttons (for inline chart)
-    document.querySelectorAll('.analytics-btn[data-analytics-type="reporter"]').forEach(btn => {
+    // Unified timeframe controls for both tabs
+    document.querySelectorAll('.timeframe-controls .analytics-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const timeframe = btn.dataset.timeframe;
+            
             // Update active button
-            document.querySelectorAll('.analytics-btn[data-analytics-type="reporter"]').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.timeframe-controls .analytics-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            loadReporterAnalytics(timeframe);
+            
+            // Determine which tab is active and load appropriate chart
+            const activeTab = document.querySelector('.tab-content.active').id;
+            
+            if (activeTab === 'activity-overview') {
+                reportersManager.loadReporterActivityAnalytics(timeframe);
+            } else if (activeTab === 'individual-reporters') {
+                loadReporterAnalytics(timeframe);
+            }
         });
     });
     
