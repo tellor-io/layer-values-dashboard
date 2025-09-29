@@ -2393,14 +2393,22 @@ async def get_query_analytics(
             # Get safe timestamp filter for consistency
             safe_filter, safe_params = get_safe_timestamp_filter()
             
+            # Get total count of unique query IDs in the timeframe
+            total_unique_query_ids = safe_get(conn.execute(f"""
+                SELECT COUNT(DISTINCT QUERY_ID) 
+                FROM layer_data 
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
+            """, [start_time, current_time_ms] + safe_params).fetchone())
+            
             # Get top query IDs in the timeframe with safe timestamp filtering
+            # Increase limit to show more query IDs (up to 50 for better coverage)
             top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
                 WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
-                LIMIT 10
+                LIMIT 50
             """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_query_ids:
@@ -2408,7 +2416,8 @@ async def get_query_analytics(
                     "timeframe": timeframe,
                     "title": f"Reports by Query ID (Past {timeframe})",
                     "data": [],
-                    "query_ids": []
+                    "query_ids": [],
+                    "total_unique_query_ids": total_unique_query_ids
                 }
             
             logger.info(f"🔍 Found {len(top_query_ids)} top query IDs")
@@ -2477,7 +2486,8 @@ async def get_query_analytics(
                 "title": f"Reports by Query ID (Past {timeframe})",
                 "time_labels": time_labels,
                 "query_ids": query_id_list,
-                "data": query_data
+                "data": query_data,
+                "total_unique_query_ids": total_unique_query_ids
             }
             
     except Exception as e:
@@ -2987,14 +2997,22 @@ async def get_agreement_analytics(
             # Get safe timestamp filter for consistency
             safe_filter, safe_params = get_safe_timestamp_filter()
             
+            # Get total count of unique query IDs in the timeframe (with trusted values)
+            total_unique_query_ids = safe_get(conn.execute(f"""
+                SELECT COUNT(DISTINCT QUERY_ID) 
+                FROM layer_data 
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND TRUSTED_VALUE != 0 AND {safe_filter}
+            """, [start_time, current_time_ms] + safe_params).fetchone())
+            
             # Get top query IDs in the timeframe
+            # Increase limit to show more query IDs (up to 50 for better coverage)
             top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
                 WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND TRUSTED_VALUE != 0 AND {safe_filter}
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
-                LIMIT 10
+                LIMIT 50
             """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_query_ids:
@@ -3002,7 +3020,8 @@ async def get_agreement_analytics(
                     "timeframe": timeframe,
                     "title": f"Agreement Analytics (Past {timeframe})",
                     "data": [],
-                    "query_ids": []
+                    "query_ids": [],
+                    "total_unique_query_ids": total_unique_query_ids
                 }
             
             logger.info(f"🔍 Found {len(top_query_ids)} top query IDs")
@@ -3081,7 +3100,8 @@ async def get_agreement_analytics(
                 "title": f"Agreement Analytics - Deviation from Trusted Values (Past {timeframe})",
                 "time_labels": time_labels,
                 "query_ids": query_id_list,
-                "data": query_data
+                "data": query_data,
+                "total_unique_query_ids": total_unique_query_ids
             }
             
     except Exception as e:

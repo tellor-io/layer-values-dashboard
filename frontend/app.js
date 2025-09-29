@@ -882,7 +882,7 @@ let hiddenDatasets = new Set();
 
 const showQueryAnalyticsModal = () => {
     elements.queryAnalyticsModal.classList.add('show');
-    loadQueryAnalytics('24h'); // Default to 24h view
+    loadQueryAnalytics('30d'); // Default to 30d view to match the stat card
 };
 
 const hideQueryAnalyticsModal = () => {
@@ -1064,6 +1064,7 @@ const createQueryLegend = (data) => {
     elements.queryLegend.innerHTML = `
         <div class="legend-header">
             <h4>Query IDs (click to toggle)</h4>
+            <p class="legend-subtitle">Showing top ${data.query_ids.length} most active query IDs (${data.query_ids.length} of ${data.total_unique_query_ids || 'unknown'} total)</p>
         </div>
         <div class="legend-items">
             ${legendItems}
@@ -1792,6 +1793,7 @@ const createAgreementLegend = (data) => {
     elements.agreementLegend.innerHTML = `
         <div class="legend-header">
             <h4>Query IDs (click to toggle)</h4>
+            <p class="legend-subtitle">Showing top ${data.query_ids.length} most active query IDs (${data.query_ids.length} of ${data.total_unique_query_ids || 'unknown'} total)</p>
         </div>
         <div class="legend-items">
             ${legendItems}

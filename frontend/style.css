@@ -826,6 +826,8 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 0.75rem;
+    max-height: 400px;
+    overflow-y: auto;
 }
 
 .legend-item {
@@ -1463,6 +1465,8 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 0.75rem;
+    max-height: 400px;
+    overflow-y: auto;
 }
 
 .agreement-legend .legend-item {
