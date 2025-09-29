@@ -422,6 +422,9 @@
                         <button class="tab-btn" data-tab="individual-reporters">
                             <i class="fas fa-users"></i> Individual Reporters
                         </button>
+                        <button class="tab-btn" data-tab="data-by-query-id">
+                            <i class="fas fa-tags"></i> Data By Query ID
+                        </button>
                     </div>
                     
                     <!-- Timeframe Controls -->
@@ -460,6 +463,20 @@
                     <div class="analytics-loading" id="reporter-analytics-loading" style="display: none;">
                         <div class="spinner"></div>
                         <div class="loading-text">Loading reporter analytics...</div>
+                    </div>
+                </div>
+                
+                <!-- Tab Content: Data By Query ID -->
+                <div class="tab-content" id="data-by-query-id">
+                    <div class="chart-container">
+                        <canvas id="query-analytics-chart"></canvas>
+                    </div>
+                    <div class="query-legend" id="query-legend">
+                        <!-- Legend will be populated here -->
+                    </div>
+                    <div class="analytics-loading" id="query-analytics-loading" style="display: none;">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Loading query analytics...</div>
                     </div>
                 </div>
             </div>
@@ -559,38 +576,6 @@
                     <div class="analytics-loading" id="analytics-loading" style="display: none;">
                         <div class="spinner"></div>
                         <div class="loading-text">Loading analytics...</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Query Analytics Modal -->
-        <div class="modal" id="query-analytics-modal">
-            <div class="modal-content analytics-modal-content">
-                <div class="modal-header">
-                    <h3 id="query-analytics-title">Reports by Query ID</h3>
-                    <button class="modal-close" id="query-analytics-modal-close">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-                <div class="modal-body analytics-modal-body">
-                    <div class="analytics-controls">
-                        <button class="analytics-btn active" data-timeframe="24h">
-                            <i class="fas fa-clock"></i> 24h
-                        </button>
-                        <button class="analytics-btn" data-timeframe="30d">
-                            <i class="fas fa-calendar"></i> 30d
-                        </button>
-                    </div>
-                    <div class="chart-container">
-                        <canvas id="query-analytics-chart"></canvas>
-                    </div>
-                    <div class="query-legend" id="query-legend">
-                        <!-- Legend will be populated here -->
-                    </div>
-                    <div class="analytics-loading" id="query-analytics-loading" style="display: none;">
-                        <div class="spinner"></div>
-                        <div class="loading-text">Loading query analytics...</div>
                     </div>
                 </div>
             </div>

@@ -103,10 +103,7 @@ const elements = {
     analyticsChart: document.getElementById('analytics-chart'),
     analyticsLoading: document.getElementById('analytics-loading'),
     
-    // Query analytics modal
-    queryAnalyticsModal: document.getElementById('query-analytics-modal'),
-    queryAnalyticsModalClose: document.getElementById('query-analytics-modal-close'),
-    queryAnalyticsTitle: document.getElementById('query-analytics-title'),
+    // Query analytics elements (now in tab)
     queryAnalyticsChart: document.getElementById('query-analytics-chart'),
     queryAnalyticsLoading: document.getElementById('query-analytics-loading'),
     queryLegend: document.getElementById('query-legend'),
@@ -880,28 +877,45 @@ const createAnalyticsChart = (data) => {
 let queryAnalyticsChart = null;
 let hiddenDatasets = new Set();
 
-const showQueryAnalyticsModal = () => {
-    elements.queryAnalyticsModal.classList.add('show');
-    loadQueryAnalytics('30d'); // Default to 30d view to match the stat card
+const showQueryAnalyticsTab = () => {
+    // Find the analytics section and scroll to it
+    const analyticsSection = document.querySelector('.analytics-section');
+    if (analyticsSection) {
+        analyticsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        
+        // Wait a bit for the scroll to start, then switch to the query tab
+        setTimeout(() => {
+            // Remove active class from all tab buttons and contents
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            // Activate the query analytics tab
+            const queryTabBtn = document.querySelector('.tab-btn[data-tab="data-by-query-id"]');
+            const queryTabContent = document.getElementById('data-by-query-id');
+            
+            if (queryTabBtn && queryTabContent) {
+                queryTabBtn.classList.add('active');
+                queryTabContent.classList.add('active');
+                
+                // Get current timeframe and load query analytics
+                const activeTimeframe = document.querySelector('.timeframe-controls .analytics-btn.active')?.dataset.timeframe || '30d';
+                loadQueryAnalytics(activeTimeframe);
+            }
+        }, 100);
+    }
 };
 
-const hideQueryAnalyticsModal = () => {
-    elements.queryAnalyticsModal.classList.remove('show');
-    if (queryAnalyticsChart) {
-        queryAnalyticsChart.destroy();
-        queryAnalyticsChart = null;
-    }
-    hiddenDatasets.clear();
-};
+// Query analytics is now in a tab, so we don't need a hide function
+// The chart cleanup will be handled when switching tabs if needed
 
 const loadQueryAnalytics = async (timeframe) => {
     try {
         // Show loading
         elements.queryAnalyticsLoading.style.display = 'flex';
         
-        // Update active button in query analytics modal
-        const queryButtons = elements.queryAnalyticsModal.querySelectorAll('.analytics-btn');
-        queryButtons.forEach(btn => {
+        // Update active button in timeframe controls (for tab context)
+        const timeframeButtons = document.querySelectorAll('.timeframe-controls .analytics-btn');
+        timeframeButtons.forEach(btn => {
             btn.classList.remove('active');
             if (btn.dataset.timeframe === timeframe) {
                 btn.classList.add('active');
@@ -911,9 +925,6 @@ const loadQueryAnalytics = async (timeframe) => {
         // Fetch query analytics data
         const data = await apiCall('/query-analytics', { timeframe });
         
-        // Update title
-        elements.queryAnalyticsTitle.textContent = data.title;
-        
         // Create or update chart
         createQueryAnalyticsChart(data);
         
@@ -922,7 +933,7 @@ const loadQueryAnalytics = async (timeframe) => {
         
     } catch (error) {
         console.error('Failed to load query analytics:', error);
-        elements.queryAnalyticsTitle.textContent = 'Failed to load query analytics';
+        // In tab context, we don't need to update a title element
     } finally {
         // Hide loading
         elements.queryAnalyticsLoading.style.display = 'none';
@@ -2371,6 +2382,8 @@ function initializeTabs() {
                 reportersManager.loadReporterActivityAnalytics(activeTimeframe);
             } else if (targetTab === 'individual-reporters') {
                 loadReporterAnalytics(activeTimeframe);
+            } else if (targetTab === 'data-by-query-id') {
+                loadQueryAnalytics(activeTimeframe);
             }
         });
     });
@@ -2404,7 +2417,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.recentActivityCard.addEventListener('click', showAnalyticsModal);
     
     // Query analytics card click
-    elements.queryIdsCard.addEventListener('click', showQueryAnalyticsModal);
+    elements.queryIdsCard.addEventListener('click', showQueryAnalyticsTab);
     
     // Power analytics card click
     elements.totalReporterPowerCard.addEventListener('click', showPowerAnalyticsModal);
@@ -2455,22 +2468,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
     
-    // Query Analytics modal functionality
-    elements.queryAnalyticsModalClose.addEventListener('click', hideQueryAnalyticsModal);
-    
-    elements.queryAnalyticsModal.addEventListener('click', (e) => {
-        if (e.target === elements.queryAnalyticsModal) {
-            hideQueryAnalyticsModal();
-        }
-    });
-    
-    // Query Analytics timeframe buttons
-    elements.queryAnalyticsModal.querySelectorAll('.analytics-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const timeframe = btn.dataset.timeframe;
-            loadQueryAnalytics(timeframe);
-        });
-    });
+    // Query Analytics is now handled by the tab system above
     
     // Reporter Analytics modal functionality
     elements.reporterAnalyticsModalClose.addEventListener('click', hideReporterAnalyticsModal);
@@ -2497,6 +2495,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 reportersManager.loadReporterActivityAnalytics(timeframe);
             } else if (activeTab === 'individual-reporters') {
                 loadReporterAnalytics(timeframe);
+            } else if (activeTab === 'data-by-query-id') {
+                loadQueryAnalytics(timeframe);
             }
         });
     });
@@ -2549,7 +2549,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Escape') {
             hideModal();
             hideAnalyticsModal();
-            hideQueryAnalyticsModal();
             hideReporterAnalyticsModal();
             hidePowerAnalyticsModal();
             hideAgreementAnalyticsModal();

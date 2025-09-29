@@ -2358,7 +2358,7 @@ async def search_data(
 
 @dashboard_app.get("/api/query-analytics")
 async def get_query_analytics(
-    timeframe: str = Query(..., regex="^(24h|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get analytics data by query ID for different timeframes"""
     try:
@@ -2379,6 +2379,14 @@ async def get_query_analytics(
                 interval_ms = 30 * 60 * 1000  # 30 minutes
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
+                
+            elif timeframe == "7d":
+                logger.info("📊 Processing 7d query analytics...")
+                # 4-hour intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 4 * 60 * 60 * 1000  # 4 hours
+                num_buckets = 42
+                start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d query analytics...")
@@ -2962,7 +2970,7 @@ async def get_reporter_power_analytics(
 
 @dashboard_app.get("/api/agreement-analytics")
 async def get_agreement_analytics(
-    timeframe: str = Query(..., regex="^(24h|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get agreement analytics showing deviation from trusted values by query ID"""
     try:
@@ -2983,6 +2991,14 @@ async def get_agreement_analytics(
                 interval_ms = 30 * 60 * 1000  # 30 minutes
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
+                
+            elif timeframe == "7d":
+                logger.info("📊 Processing 7d agreement analytics...")
+                # 4-hour intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 4 * 60 * 60 * 1000  # 4 hours
+                num_buckets = 42
+                start_time = current_time_ms - days_7_ms
                 
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d agreement analytics...")
