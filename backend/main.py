@@ -1219,9 +1219,8 @@ def load_csv_files():
     try:
         # Use thread-safe database access
         with db_lock:
-            # Recreate table to ensure correct types now that TRUSTED_VALUE may be JSON/text
-            conn.execute("DROP TABLE IF EXISTS layer_data")
             # Create unified table schema with TX_HASH as primary key to prevent duplicates
+            # Only create if it doesn't exist - don't drop existing data!
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS layer_data (
                     REPORTER VARCHAR,
@@ -1254,6 +1253,27 @@ def load_csv_files():
             except Exception as idx_error:
                 logger.warning(f"⚠️  Warning: Could not create some indexes: {idx_error}")
         
+        # Synchronize in-memory tracking with actual database content
+        # Check which tables are already loaded in the database
+        try:
+            existing_tables = conn.execute("""
+                SELECT DISTINCT source_file FROM layer_data 
+                WHERE source_file IS NOT NULL
+            """).fetchall()
+            existing_table_files = {safe_get(row) for row in existing_tables if safe_get(row)}
+            
+            # Sync the loaded_historical_tables set with what's actually in the database
+            data_info["loaded_historical_tables"] = existing_table_files.copy()
+            
+            if existing_table_files:
+                logger.info(f"📋 Found {len(existing_table_files)} tables already loaded in database: {list(existing_table_files)}")
+            else:
+                logger.info("📋 No existing tables found in database, starting fresh")
+                
+        except Exception as sync_error:
+            logger.warning(f"⚠️  Could not sync table tracking with database: {sync_error}")
+            # Continue with existing tracking if sync fails
+            
         table_files = get_table_files()
         
         if not table_files:
