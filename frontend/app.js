@@ -103,13 +103,25 @@ const elements = {
     analyticsChart: document.getElementById('analytics-chart'),
     analyticsLoading: document.getElementById('analytics-loading'),
     
-    // Query analytics modal
-    queryAnalyticsModal: document.getElementById('query-analytics-modal'),
-    queryAnalyticsModalClose: document.getElementById('query-analytics-modal-close'),
-    queryAnalyticsTitle: document.getElementById('query-analytics-title'),
+    // Query analytics elements (now in tab)
     queryAnalyticsChart: document.getElementById('query-analytics-chart'),
     queryAnalyticsLoading: document.getElementById('query-analytics-loading'),
     queryLegend: document.getElementById('query-legend'),
+    
+    // Values analytics elements
+    valuesChart: document.getElementById('values-chart'),
+    valuesLoading: document.getElementById('values-loading'),
+    valuesLegend: document.getElementById('values-legend'),
+    
+    // Trusted values analytics elements
+    trustedValuesChart: document.getElementById('trusted-values-chart'),
+    trustedValuesLoading: document.getElementById('trusted-values-loading'),
+    trustedValuesLegend: document.getElementById('trusted-values-legend'),
+    
+    // Overlays analytics elements
+    overlaysChart: document.getElementById('overlays-chart'),
+    overlaysLoading: document.getElementById('overlays-loading'),
+    overlaysLegend: document.getElementById('overlays-legend'),
     
     // Reporter analytics modal
     reporterAnalyticsModal: document.getElementById('reporter-analytics-modal'),
@@ -880,28 +892,45 @@ const createAnalyticsChart = (data) => {
 let queryAnalyticsChart = null;
 let hiddenDatasets = new Set();
 
-const showQueryAnalyticsModal = () => {
-    elements.queryAnalyticsModal.classList.add('show');
-    loadQueryAnalytics('24h'); // Default to 24h view
+const showQueryAnalyticsTab = () => {
+    // Find the analytics section and scroll to it
+    const analyticsSection = document.querySelector('.analytics-section');
+    if (analyticsSection) {
+        analyticsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        
+        // Wait a bit for the scroll to start, then switch to the query tab
+        setTimeout(() => {
+            // Remove active class from all tab buttons and contents
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            // Activate the query analytics tab
+            const queryTabBtn = document.querySelector('.tab-btn[data-tab="data-by-query-id"]');
+            const queryTabContent = document.getElementById('data-by-query-id');
+            
+            if (queryTabBtn && queryTabContent) {
+                queryTabBtn.classList.add('active');
+                queryTabContent.classList.add('active');
+                
+                // Get current timeframe and load query analytics
+                const activeTimeframe = document.querySelector('.timeframe-controls .analytics-btn.active')?.dataset.timeframe || '30d';
+                loadQueryAnalytics(activeTimeframe);
+            }
+        }, 100);
+    }
 };
 
-const hideQueryAnalyticsModal = () => {
-    elements.queryAnalyticsModal.classList.remove('show');
-    if (queryAnalyticsChart) {
-        queryAnalyticsChart.destroy();
-        queryAnalyticsChart = null;
-    }
-    hiddenDatasets.clear();
-};
+// Query analytics is now in a tab, so we don't need a hide function
+// The chart cleanup will be handled when switching tabs if needed
 
 const loadQueryAnalytics = async (timeframe) => {
     try {
         // Show loading
         elements.queryAnalyticsLoading.style.display = 'flex';
         
-        // Update active button in query analytics modal
-        const queryButtons = elements.queryAnalyticsModal.querySelectorAll('.analytics-btn');
-        queryButtons.forEach(btn => {
+        // Update active button in timeframe controls (for tab context)
+        const timeframeButtons = document.querySelectorAll('.timeframe-controls .analytics-btn');
+        timeframeButtons.forEach(btn => {
             btn.classList.remove('active');
             if (btn.dataset.timeframe === timeframe) {
                 btn.classList.add('active');
@@ -911,9 +940,6 @@ const loadQueryAnalytics = async (timeframe) => {
         // Fetch query analytics data
         const data = await apiCall('/query-analytics', { timeframe });
         
-        // Update title
-        elements.queryAnalyticsTitle.textContent = data.title;
-        
         // Create or update chart
         createQueryAnalyticsChart(data);
         
@@ -922,7 +948,7 @@ const loadQueryAnalytics = async (timeframe) => {
         
     } catch (error) {
         console.error('Failed to load query analytics:', error);
-        elements.queryAnalyticsTitle.textContent = 'Failed to load query analytics';
+        // In tab context, we don't need to update a title element
     } finally {
         // Hide loading
         elements.queryAnalyticsLoading.style.display = 'none';
@@ -1064,6 +1090,7 @@ const createQueryLegend = (data) => {
     elements.queryLegend.innerHTML = `
         <div class="legend-header">
             <h4>Query IDs (click to toggle)</h4>
+            <p class="legend-subtitle">Showing top ${data.query_ids.length} most active query IDs (${data.query_ids.length} of ${data.total_unique_query_ids || 'unknown'} total)</p>
         </div>
         <div class="legend-items">
             ${legendItems}
@@ -1091,6 +1118,653 @@ const createQueryLegend = (data) => {
                     }
                 });
                 queryAnalyticsChart.update();
+            }
+        });
+    });
+};
+
+// Values Analytics functionality
+let valuesChart = null;
+let hiddenValuesDatasets = new Set();
+
+const loadValuesAnalytics = async (timeframe) => {
+    try {
+        // Show loading
+        elements.valuesLoading.style.display = 'flex';
+        
+        // Update active button in timeframe controls (for tab context)
+        const timeframeButtons = document.querySelectorAll('.timeframe-controls .analytics-btn');
+        timeframeButtons.forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.timeframe === timeframe) {
+                btn.classList.add('active');
+            }
+        });
+        
+        // Fetch values analytics data
+        const data = await apiCall('/values-analytics', { timeframe });
+        
+        // Create or update chart
+        createValuesChart(data);
+        
+        // Create legend
+        createValuesLegend(data);
+        
+    } catch (error) {
+        console.error('Failed to load values analytics:', error);
+    } finally {
+        // Hide loading
+        elements.valuesLoading.style.display = 'none';
+    }
+};
+
+const createValuesChart = (data) => {
+    const ctx = elements.valuesChart.getContext('2d');
+    
+    // Destroy existing chart
+    if (valuesChart) {
+        valuesChart.destroy();
+    }
+    
+    if (!data.query_ids || data.query_ids.length === 0) {
+        // Show "No data" message
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = '16px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('No SpotPrice data available for this timeframe', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+    }
+    
+    // Generate colors for each query ID
+    const colors = generateColors(data.query_ids.length);
+    
+    // Prepare datasets
+    const datasets = data.query_ids.map((queryInfo, index) => {
+        const isHidden = hiddenValuesDatasets.has(queryInfo.id);
+        return {
+            label: queryInfo.short_name,
+            data: data.data[queryInfo.id] || [],
+            borderColor: colors[index],
+            backgroundColor: `${colors[index]}20`,
+            borderWidth: 2,
+            fill: false,
+            tension: 0.1,
+            pointBackgroundColor: colors[index],
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            hidden: isHidden,
+            queryId: queryInfo.id,
+            mostRecentValue: queryInfo.most_recent_value
+        };
+    });
+    
+    valuesChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.time_labels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false // We'll use our custom legend
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        title: function(context) {
+                            return `Time: ${context[0].label}`;
+                        },
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            const value = context.parsed.y;
+                            return value !== null ? `${dataset.label}: ${formatValue(value)}` : `${dataset.label}: No data`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: '#00d4ff',
+                        maxTicksLimit: 8
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    }
+                },
+                y: {
+                    ticks: {
+                        color: '#00d4ff',
+                        callback: function(value) {
+                            return formatValue(value);
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Value',
+                        color: '#00d4ff'
+                    }
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            }
+        }
+    });
+};
+
+const createValuesLegend = (data) => {
+    if (!data.query_ids || data.query_ids.length === 0) {
+        elements.valuesLegend.innerHTML = '<p class="no-data">No SpotPrice query IDs found for this timeframe</p>';
+        return;
+    }
+    
+    const colors = generateColors(data.query_ids.length);
+    
+    const legendItems = data.query_ids.map((queryInfo, index) => {
+        const isHidden = hiddenValuesDatasets.has(queryInfo.id);
+        const valueDisplay = queryInfo.most_recent_value !== null && queryInfo.most_recent_value !== undefined 
+            ? formatValue(queryInfo.most_recent_value) 
+            : 'N/A';
+        
+        return `
+            <div class="legend-item ${isHidden ? 'hidden' : ''}" data-query-id="${queryInfo.id}">
+                <div class="legend-color" style="background-color: ${colors[index]}"></div>
+                <div class="legend-text">
+                    <div class="legend-label" title="${queryInfo.id}">${queryInfo.short_name}</div>
+                    <div class="legend-count">Latest: ${valueDisplay}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    elements.valuesLegend.innerHTML = `
+        <div class="legend-header">
+            <h4>Query IDs (click to toggle)</h4>
+            <p class="legend-subtitle">Showing SpotPrice values over time</p>
+        </div>
+        <div class="legend-items">
+            ${legendItems}
+        </div>
+    `;
+    
+    // Add click handlers for legend items
+    elements.valuesLegend.querySelectorAll('.legend-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const queryId = item.dataset.queryId;
+            
+            if (hiddenValuesDatasets.has(queryId)) {
+                hiddenValuesDatasets.delete(queryId);
+                item.classList.remove('hidden');
+            } else {
+                hiddenValuesDatasets.add(queryId);
+                item.classList.add('hidden');
+            }
+            
+            // Update chart
+            if (valuesChart) {
+                valuesChart.data.datasets.forEach(dataset => {
+                    if (dataset.queryId === queryId) {
+                        dataset.hidden = hiddenValuesDatasets.has(queryId);
+                    }
+                });
+                valuesChart.update();
+            }
+        });
+    });
+};
+
+// Trusted Values Analytics functionality
+let trustedValuesChart = null;
+let hiddenTrustedValuesDatasets = new Set();
+
+const loadTrustedValuesAnalytics = async (timeframe) => {
+    try {
+        // Show loading
+        elements.trustedValuesLoading.style.display = 'flex';
+        
+        // Update active button in timeframe controls (for tab context)
+        const timeframeButtons = document.querySelectorAll('.timeframe-controls .analytics-btn');
+        timeframeButtons.forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.timeframe === timeframe) {
+                btn.classList.add('active');
+            }
+        });
+        
+        // Fetch trusted values analytics data
+        const data = await apiCall('/trusted-values-analytics', { timeframe });
+        
+        // Create or update chart
+        createTrustedValuesChart(data);
+        
+        // Create legend
+        createTrustedValuesLegend(data);
+        
+    } catch (error) {
+        console.error('Failed to load trusted values analytics:', error);
+    } finally {
+        // Hide loading
+        elements.trustedValuesLoading.style.display = 'none';
+    }
+};
+
+const createTrustedValuesChart = (data) => {
+    const ctx = elements.trustedValuesChart.getContext('2d');
+    
+    // Destroy existing chart
+    if (trustedValuesChart) {
+        trustedValuesChart.destroy();
+    }
+    
+    if (!data.query_ids || data.query_ids.length === 0) {
+        // Show "No data" message
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = '16px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('No SpotPrice trusted values available for this timeframe', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+    }
+    
+    // Generate colors for each query ID
+    const colors = generateColors(data.query_ids.length);
+    
+    // Prepare datasets
+    const datasets = data.query_ids.map((queryInfo, index) => {
+        const isHidden = hiddenTrustedValuesDatasets.has(queryInfo.id);
+        return {
+            label: queryInfo.short_name,
+            data: data.data[queryInfo.id] || [],
+            borderColor: colors[index],
+            backgroundColor: `${colors[index]}20`,
+            borderWidth: 2,
+            fill: false,
+            tension: 0.1,
+            pointBackgroundColor: colors[index],
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            hidden: isHidden,
+            queryId: queryInfo.id,
+            mostRecentTrustedValue: queryInfo.most_recent_trusted_value
+        };
+    });
+    
+    trustedValuesChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.time_labels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false // We'll use our custom legend
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        title: function(context) {
+                            return `Time: ${context[0].label}`;
+                        },
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            const value = context.parsed.y;
+                            return value !== null ? `${dataset.label}: ${formatValue(value)}` : `${dataset.label}: No data`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: '#00d4ff',
+                        maxTicksLimit: 8
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    }
+                },
+                y: {
+                    ticks: {
+                        color: '#00d4ff',
+                        callback: function(value) {
+                            return formatValue(value);
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Trusted Value',
+                        color: '#00d4ff'
+                    }
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            }
+        }
+    });
+};
+
+const createTrustedValuesLegend = (data) => {
+    if (!data.query_ids || data.query_ids.length === 0) {
+        elements.trustedValuesLegend.innerHTML = '<p class="no-data">No SpotPrice query IDs with trusted values found for this timeframe</p>';
+        return;
+    }
+    
+    const colors = generateColors(data.query_ids.length);
+    
+    const legendItems = data.query_ids.map((queryInfo, index) => {
+        const isHidden = hiddenTrustedValuesDatasets.has(queryInfo.id);
+        const valueDisplay = queryInfo.most_recent_trusted_value !== null && queryInfo.most_recent_trusted_value !== undefined 
+            ? formatValue(queryInfo.most_recent_trusted_value) 
+            : 'N/A';
+        
+        return `
+            <div class="legend-item ${isHidden ? 'hidden' : ''}" data-query-id="${queryInfo.id}">
+                <div class="legend-color" style="background-color: ${colors[index]}"></div>
+                <div class="legend-text">
+                    <div class="legend-label" title="${queryInfo.id}">${queryInfo.short_name}</div>
+                    <div class="legend-count">Latest: ${valueDisplay}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    elements.trustedValuesLegend.innerHTML = `
+        <div class="legend-header">
+            <h4>Query IDs (click to toggle)</h4>
+            <p class="legend-subtitle">Showing SpotPrice trusted values over time</p>
+        </div>
+        <div class="legend-items">
+            ${legendItems}
+        </div>
+    `;
+    
+    // Add click handlers for legend items
+    elements.trustedValuesLegend.querySelectorAll('.legend-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const queryId = item.dataset.queryId;
+            
+            if (hiddenTrustedValuesDatasets.has(queryId)) {
+                hiddenTrustedValuesDatasets.delete(queryId);
+                item.classList.remove('hidden');
+            } else {
+                hiddenTrustedValuesDatasets.add(queryId);
+                item.classList.add('hidden');
+            }
+            
+            // Update chart
+            if (trustedValuesChart) {
+                trustedValuesChart.data.datasets.forEach(dataset => {
+                    if (dataset.queryId === queryId) {
+                        dataset.hidden = hiddenTrustedValuesDatasets.has(queryId);
+                    }
+                });
+                trustedValuesChart.update();
+            }
+        });
+    });
+};
+
+// Overlays Analytics functionality
+let overlaysChart = null;
+let hiddenOverlaysQueryIds = new Set();
+const TRB_USD_QUERY_ID = '0x5c13cd9c97dbb98f2429c101a2a8150e6c7a0ddaff6124ee176a3a411067ded0';
+
+const loadOverlaysAnalytics = async (timeframe) => {
+    try {
+        // Show loading
+        elements.overlaysLoading.style.display = 'flex';
+        
+        // Update active button in timeframe controls
+        const timeframeButtons = document.querySelectorAll('.timeframe-controls .analytics-btn');
+        timeframeButtons.forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.timeframe === timeframe) {
+                btn.classList.add('active');
+            }
+        });
+        
+        // Fetch overlays analytics data
+        const data = await apiCall('/overlays-analytics', { timeframe });
+        
+        // Create or update chart
+        createOverlaysChart(data);
+        
+        // Create legend
+        createOverlaysLegend(data);
+        
+    } catch (error) {
+        console.error('Failed to load overlays analytics:', error);
+    } finally {
+        // Hide loading
+        elements.overlaysLoading.style.display = 'none';
+    }
+};
+
+const createOverlaysChart = (data) => {
+    const ctx = elements.overlaysChart.getContext('2d');
+    
+    // Destroy existing chart
+    if (overlaysChart) {
+        overlaysChart.destroy();
+    }
+    
+    if (!data.query_ids || data.query_ids.length === 0) {
+        // Show "No data" message
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = '16px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('No SpotPrice data available for this timeframe', ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+    }
+    
+    // Initialize hiddenOverlaysQueryIds - hide all except TRB/USD
+    hiddenOverlaysQueryIds.clear();
+    data.query_ids.forEach(queryInfo => {
+        if (queryInfo.id !== TRB_USD_QUERY_ID) {
+            hiddenOverlaysQueryIds.add(queryInfo.id);
+        }
+    });
+    
+    // Generate colors for each query ID
+    const colors = generateColors(data.query_ids.length);
+    
+    // Prepare datasets - create 2 datasets per query ID (VALUE solid, TRUSTED_VALUE dashed)
+    const datasets = [];
+    data.query_ids.forEach((queryInfo, index) => {
+        const isHidden = hiddenOverlaysQueryIds.has(queryInfo.id);
+        const color = colors[index];
+        
+        // VALUE dataset (solid line)
+        datasets.push({
+            label: `${queryInfo.short_name} - Value`,
+            data: data.data[queryInfo.id]?.value || [],
+            borderColor: color,
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            fill: false,
+            tension: 0.1,
+            pointBackgroundColor: color,
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            hidden: isHidden,
+            queryId: queryInfo.id,
+            dataType: 'value'
+        });
+        
+        // TRUSTED_VALUE dataset (dashed line)
+        datasets.push({
+            label: `${queryInfo.short_name} - Trusted`,
+            data: data.data[queryInfo.id]?.trusted_value || [],
+            borderColor: color,
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            borderDash: [5, 5],  // Dashed line
+            fill: false,
+            tension: 0.1,
+            pointBackgroundColor: color,
+            pointBorderColor: '#000',
+            pointBorderWidth: 1,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            hidden: isHidden,
+            queryId: queryInfo.id,
+            dataType: 'trusted_value'
+        });
+    });
+    
+    overlaysChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.time_labels,
+            datasets: datasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false // We'll use our custom legend
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        title: function(context) {
+                            return `Time: ${context[0].label}`;
+                        },
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            const value = context.parsed.y;
+                            return value !== null ? `${dataset.label}: ${formatValue(value)}` : `${dataset.label}: No data`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        color: '#00d4ff',
+                        maxTicksLimit: 8
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    }
+                },
+                y: {
+                    ticks: {
+                        color: '#00d4ff',
+                        callback: function(value) {
+                            return formatValue(value);
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(51, 51, 68, 0.5)'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Value',
+                        color: '#00d4ff'
+                    }
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            }
+        }
+    });
+};
+
+const createOverlaysLegend = (data) => {
+    if (!data.query_ids || data.query_ids.length === 0) {
+        elements.overlaysLegend.innerHTML = '<p class="no-data">No SpotPrice query IDs found for this timeframe</p>';
+        return;
+    }
+    
+    const colors = generateColors(data.query_ids.length);
+    
+    const legendItems = data.query_ids.map((queryInfo, index) => {
+        const isHidden = hiddenOverlaysQueryIds.has(queryInfo.id);
+        const valueDisplay = queryInfo.most_recent_value !== null && queryInfo.most_recent_value !== undefined 
+            ? formatValue(queryInfo.most_recent_value) 
+            : 'N/A';
+        const trustedDisplay = queryInfo.most_recent_trusted_value !== null && queryInfo.most_recent_trusted_value !== undefined 
+            ? formatValue(queryInfo.most_recent_trusted_value) 
+            : 'N/A';
+        
+        return `
+            <div class="legend-item overlay-legend-item ${isHidden ? 'hidden' : ''}" data-query-id="${queryInfo.id}">
+                <div class="legend-color" style="background-color: ${colors[index]}"></div>
+                <div class="legend-text">
+                    <div class="legend-label" title="${queryInfo.id}">${queryInfo.short_name}</div>
+                    <div class="overlay-values">
+                        <span class="overlay-value-line">━ Value: ${valueDisplay}</span>
+                        <span class="overlay-trusted-line">┄ Trusted: ${trustedDisplay}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    elements.overlaysLegend.innerHTML = `
+        <div class="legend-header">
+            <h4>Query IDs (click to toggle)</h4>
+            <p class="legend-subtitle">Showing VALUE (solid) and TRUSTED_VALUE (dashed) overlays. Click to show/hide.</p>
+        </div>
+        <div class="legend-items">
+            ${legendItems}
+        </div>
+    `;
+    
+    // Add click handlers for legend items
+    elements.overlaysLegend.querySelectorAll('.legend-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const queryId = item.dataset.queryId;
+            
+            if (hiddenOverlaysQueryIds.has(queryId)) {
+                // Toggle ON - show both lines
+                hiddenOverlaysQueryIds.delete(queryId);
+                item.classList.remove('hidden');
+            } else {
+                // Toggle OFF - hide both lines
+                hiddenOverlaysQueryIds.add(queryId);
+                item.classList.add('hidden');
+            }
+            
+            // Update chart - toggle both VALUE and TRUSTED_VALUE datasets for this query ID
+            if (overlaysChart) {
+                overlaysChart.data.datasets.forEach(dataset => {
+                    if (dataset.queryId === queryId) {
+                        dataset.hidden = hiddenOverlaysQueryIds.has(queryId);
+                    }
+                });
+                overlaysChart.update();
             }
         });
     });
@@ -1792,6 +2466,7 @@ const createAgreementLegend = (data) => {
     elements.agreementLegend.innerHTML = `
         <div class="legend-header">
             <h4>Query IDs (click to toggle)</h4>
+            <p class="legend-subtitle">Showing top ${data.query_ids.length} most active query IDs (${data.query_ids.length} of ${data.total_unique_query_ids || 'unknown'} total)</p>
         </div>
         <div class="legend-items">
             ${legendItems}
@@ -2369,6 +3044,14 @@ function initializeTabs() {
                 reportersManager.loadReporterActivityAnalytics(activeTimeframe);
             } else if (targetTab === 'individual-reporters') {
                 loadReporterAnalytics(activeTimeframe);
+            } else if (targetTab === 'data-by-query-id') {
+                loadQueryAnalytics(activeTimeframe);
+            } else if (targetTab === 'values') {
+                loadValuesAnalytics(activeTimeframe);
+            } else if (targetTab === 'trusted-values') {
+                loadTrustedValuesAnalytics(activeTimeframe);
+            } else if (targetTab === 'overlays') {
+                loadOverlaysAnalytics(activeTimeframe);
             }
         });
     });
@@ -2402,7 +3085,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.recentActivityCard.addEventListener('click', showAnalyticsModal);
     
     // Query analytics card click
-    elements.queryIdsCard.addEventListener('click', showQueryAnalyticsModal);
+    elements.queryIdsCard.addEventListener('click', showQueryAnalyticsTab);
     
     // Power analytics card click
     elements.totalReporterPowerCard.addEventListener('click', showPowerAnalyticsModal);
@@ -2453,22 +3136,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
     
-    // Query Analytics modal functionality
-    elements.queryAnalyticsModalClose.addEventListener('click', hideQueryAnalyticsModal);
-    
-    elements.queryAnalyticsModal.addEventListener('click', (e) => {
-        if (e.target === elements.queryAnalyticsModal) {
-            hideQueryAnalyticsModal();
-        }
-    });
-    
-    // Query Analytics timeframe buttons
-    elements.queryAnalyticsModal.querySelectorAll('.analytics-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const timeframe = btn.dataset.timeframe;
-            loadQueryAnalytics(timeframe);
-        });
-    });
+    // Query Analytics is now handled by the tab system above
     
     // Reporter Analytics modal functionality
     elements.reporterAnalyticsModalClose.addEventListener('click', hideReporterAnalyticsModal);
@@ -2495,6 +3163,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 reportersManager.loadReporterActivityAnalytics(timeframe);
             } else if (activeTab === 'individual-reporters') {
                 loadReporterAnalytics(timeframe);
+            } else if (activeTab === 'data-by-query-id') {
+                loadQueryAnalytics(timeframe);
+            } else if (activeTab === 'values') {
+                loadValuesAnalytics(timeframe);
+            } else if (activeTab === 'trusted-values') {
+                loadTrustedValuesAnalytics(timeframe);
+            } else if (activeTab === 'overlays') {
+                loadOverlaysAnalytics(timeframe);
             }
         });
     });
@@ -2547,7 +3223,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Escape') {
             hideModal();
             hideAnalyticsModal();
-            hideQueryAnalyticsModal();
             hideReporterAnalyticsModal();
             hidePowerAnalyticsModal();
             hideAgreementAnalyticsModal();

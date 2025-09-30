@@ -826,6 +826,8 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 0.75rem;
+    max-height: 400px;
+    overflow-y: auto;
 }
 
 .legend-item {
@@ -1463,6 +1465,8 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 0.75rem;
+    max-height: 400px;
+    overflow-y: auto;
 }
 
 .agreement-legend .legend-item {
@@ -1957,4 +1961,27 @@ body {
 
 .data-table tbody tr:hover {
     background-color: rgba(0, 255, 136, 0.1);
+}
+
+/* Overlays legend specific styles */
+.overlay-legend-item .overlay-values {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+}
+
+.overlay-value-line,
+.overlay-trusted-line {
+    font-size: 0.625rem;
+    color: #00d4ff;
+    font-family: 'Courier New', monospace;
+}
+
+.overlay-value-line {
+    opacity: 1;
+}
+
+.overlay-trusted-line {
+    opacity: 0.8;
 } 

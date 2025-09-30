@@ -2358,7 +2358,7 @@ async def search_data(
 
 @dashboard_app.get("/api/query-analytics")
 async def get_query_analytics(
-    timeframe: str = Query(..., regex="^(24h|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get analytics data by query ID for different timeframes"""
     try:
@@ -2380,6 +2380,14 @@ async def get_query_analytics(
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
                 
+            elif timeframe == "7d":
+                logger.info("📊 Processing 7d query analytics...")
+                # 4-hour intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 4 * 60 * 60 * 1000  # 4 hours
+                num_buckets = 42
+                start_time = current_time_ms - days_7_ms
+                
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d query analytics...")
                 # Daily intervals over past 30 days
@@ -2393,14 +2401,22 @@ async def get_query_analytics(
             # Get safe timestamp filter for consistency
             safe_filter, safe_params = get_safe_timestamp_filter()
             
+            # Get total count of unique query IDs in the timeframe
+            total_unique_query_ids = safe_get(conn.execute(f"""
+                SELECT COUNT(DISTINCT QUERY_ID) 
+                FROM layer_data 
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
+            """, [start_time, current_time_ms] + safe_params).fetchone())
+            
             # Get top query IDs in the timeframe with safe timestamp filtering
+            # Increase limit to show more query IDs (up to 50 for better coverage)
             top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
                 WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND {safe_filter}
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
-                LIMIT 10
+                LIMIT 50
             """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_query_ids:
@@ -2408,7 +2424,8 @@ async def get_query_analytics(
                     "timeframe": timeframe,
                     "title": f"Reports by Query ID (Past {timeframe})",
                     "data": [],
-                    "query_ids": []
+                    "query_ids": [],
+                    "total_unique_query_ids": total_unique_query_ids
                 }
             
             logger.info(f"🔍 Found {len(top_query_ids)} top query IDs")
@@ -2477,7 +2494,8 @@ async def get_query_analytics(
                 "title": f"Reports by Query ID (Past {timeframe})",
                 "time_labels": time_labels,
                 "query_ids": query_id_list,
-                "data": query_data
+                "data": query_data,
+                "total_unique_query_ids": total_unique_query_ids
             }
             
     except Exception as e:
@@ -2952,7 +2970,7 @@ async def get_reporter_power_analytics(
 
 @dashboard_app.get("/api/agreement-analytics")
 async def get_agreement_analytics(
-    timeframe: str = Query(..., regex="^(24h|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
 ):
     """Get agreement analytics showing deviation from trusted values by query ID"""
     try:
@@ -2974,6 +2992,14 @@ async def get_agreement_analytics(
                 num_buckets = 48
                 start_time = current_time_ms - hours_24_ms
                 
+            elif timeframe == "7d":
+                logger.info("📊 Processing 7d agreement analytics...")
+                # 4-hour intervals over past 7 days
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 4 * 60 * 60 * 1000  # 4 hours
+                num_buckets = 42
+                start_time = current_time_ms - days_7_ms
+                
             elif timeframe == "30d":
                 logger.info("📊 Processing 30d agreement analytics...")
                 # Daily intervals over past 30 days
@@ -2987,14 +3013,22 @@ async def get_agreement_analytics(
             # Get safe timestamp filter for consistency
             safe_filter, safe_params = get_safe_timestamp_filter()
             
+            # Get total count of unique query IDs in the timeframe (with trusted values)
+            total_unique_query_ids = safe_get(conn.execute(f"""
+                SELECT COUNT(DISTINCT QUERY_ID) 
+                FROM layer_data 
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND TRUSTED_VALUE != 0 AND {safe_filter}
+            """, [start_time, current_time_ms] + safe_params).fetchone())
+            
             # Get top query IDs in the timeframe
+            # Increase limit to show more query IDs (up to 50 for better coverage)
             top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
                 WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND TRUSTED_VALUE != 0 AND {safe_filter}
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
-                LIMIT 10
+                LIMIT 50
             """, [start_time, current_time_ms] + safe_params).fetchall()
             
             if not top_query_ids:
@@ -3002,7 +3036,8 @@ async def get_agreement_analytics(
                     "timeframe": timeframe,
                     "title": f"Agreement Analytics (Past {timeframe})",
                     "data": [],
-                    "query_ids": []
+                    "query_ids": [],
+                    "total_unique_query_ids": total_unique_query_ids
                 }
             
             logger.info(f"🔍 Found {len(top_query_ids)} top query IDs")
@@ -3081,7 +3116,8 @@ async def get_agreement_analytics(
                 "title": f"Agreement Analytics - Deviation from Trusted Values (Past {timeframe})",
                 "time_labels": time_labels,
                 "query_ids": query_id_list,
-                "data": query_data
+                "data": query_data,
+                "total_unique_query_ids": total_unique_query_ids
             }
             
     except Exception as e:
@@ -3099,6 +3135,489 @@ async def get_agreement_analytics(
             pass
             
         raise HTTPException(status_code=500, detail=f"Agreement analytics processing failed: {str(e)}")
+
+@dashboard_app.get("/api/values-analytics")
+async def get_values_analytics(
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+):
+    """Get values analytics for SpotPrice query types over time by query ID"""
+    try:
+        logger.info(f"🔄 Values analytics request: timeframe={timeframe}")
+        current_time_ms = int(time.time() * 1000)
+        
+        # Use thread-safe database access
+        with db_lock:
+            if timeframe == "24h":
+                hours_24_ms = 24 * 60 * 60 * 1000
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
+                start_time = current_time_ms - hours_24_ms
+            elif timeframe == "7d":
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 4 * 60 * 60 * 1000  # 4 hours
+                num_buckets = 42
+                start_time = current_time_ms - days_7_ms
+            elif timeframe == "30d":
+                days_30_ms = 30 * 24 * 60 * 60 * 1000
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
+                start_time = current_time_ms - days_30_ms
+            
+            logger.info(f"📈 Querying values data from {start_time} to {current_time_ms}")
+            
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Get SpotPrice query IDs in the timeframe
+            top_query_ids = conn.execute(f"""
+                SELECT QUERY_ID, COUNT(*) as count 
+                FROM layer_data 
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                AND QUERY_TYPE = 'SpotPrice'
+                AND {safe_filter}
+                GROUP BY QUERY_ID 
+                ORDER BY count DESC 
+                LIMIT 20
+            """, [start_time, current_time_ms] + safe_params).fetchall()
+            
+            if not top_query_ids:
+                return {
+                    "timeframe": timeframe,
+                    "title": f"Values - SpotPrice (Past {timeframe})",
+                    "data": {},
+                    "query_ids": [],
+                    "time_labels": []
+                }
+            
+            logger.info(f"🔍 Found {len(top_query_ids)} SpotPrice query IDs")
+            
+            # Get time series data for each query ID
+            query_data = {}
+            query_id_list = []
+            
+            for query_id_row in top_query_ids:
+                query_id = query_id_row[0]
+                
+                # Get most recent value for this query ID - cast to DOUBLE
+                most_recent = conn.execute(f"""
+                    SELECT CAST(VALUE AS DOUBLE) as VALUE 
+                    FROM layer_data 
+                    WHERE QUERY_ID = ? 
+                    AND QUERY_TYPE = 'SpotPrice'
+                    AND VALUE IS NOT NULL
+                    AND {safe_filter}
+                    ORDER BY TIMESTAMP DESC 
+                    LIMIT 1
+                """, [query_id] + safe_params).fetchone()
+                
+                most_recent_value = most_recent[0] if most_recent else None
+                
+                query_id_list.append({
+                    "id": query_id,
+                    "total_count": query_id_row[1],
+                    "short_name": get_query_display_name(query_id),
+                    "most_recent_value": most_recent_value
+                })
+                
+                # Get bucketed average values for this query ID - cast VALUE to DOUBLE
+                results = conn.execute(f"""
+                    WITH time_buckets AS (
+                        SELECT 
+                            TIMESTAMP,
+                            CAST(VALUE AS DOUBLE) as VALUE,
+                            FLOOR((TIMESTAMP - ?) / ?) as bucket_id
+                        FROM layer_data 
+                        WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                        AND QUERY_ID = ? 
+                        AND QUERY_TYPE = 'SpotPrice'
+                        AND VALUE IS NOT NULL
+                        AND {safe_filter}
+                    )
+                    SELECT 
+                        bucket_id,
+                        AVG(VALUE) as avg_value
+                    FROM time_buckets
+                    GROUP BY bucket_id
+                    ORDER BY bucket_id
+                """, [start_time, interval_ms, start_time, current_time_ms, query_id] + safe_params).fetchall()
+                
+                # Create complete time series for this query ID
+                buckets = []
+                for i in range(num_buckets):
+                    # Find matching result
+                    value = None
+                    for result in results:
+                        if result[0] == i:
+                            value = result[1]
+                            break
+                    buckets.append(value)
+                
+                query_data[query_id] = buckets
+            
+            # Generate time labels
+            time_labels = []
+            for i in range(num_buckets):
+                bucket_start = start_time + (i * interval_ms)
+                dt = pd.to_datetime(bucket_start, unit='ms')
+                
+                if timeframe == "24h":
+                    time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d %H:%M'))
+                elif timeframe == "30d":
+                    time_labels.append(dt.strftime('%m/%d'))
+            
+            return {
+                "timeframe": timeframe,
+                "title": f"Values - SpotPrice (Past {timeframe})",
+                "time_labels": time_labels,
+                "query_ids": query_id_list,
+                "data": query_data
+            }
+            
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"❌ Values analytics error: {str(e)}")
+        logger.error(f"📋 Full traceback:\n{error_details}")
+        raise HTTPException(status_code=500, detail=f"Values analytics processing failed: {str(e)}")
+
+@dashboard_app.get("/api/trusted-values-analytics")
+async def get_trusted_values_analytics(
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+):
+    """Get trusted values analytics for SpotPrice query types over time by query ID"""
+    try:
+        logger.info(f"🔄 Trusted values analytics request: timeframe={timeframe}")
+        current_time_ms = int(time.time() * 1000)
+        
+        # Use thread-safe database access
+        with db_lock:
+            if timeframe == "24h":
+                hours_24_ms = 24 * 60 * 60 * 1000
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
+                start_time = current_time_ms - hours_24_ms
+            elif timeframe == "7d":
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 4 * 60 * 60 * 1000  # 4 hours
+                num_buckets = 42
+                start_time = current_time_ms - days_7_ms
+            elif timeframe == "30d":
+                days_30_ms = 30 * 24 * 60 * 60 * 1000
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
+                start_time = current_time_ms - days_30_ms
+            
+            logger.info(f"📈 Querying trusted values data from {start_time} to {current_time_ms}")
+            
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Get SpotPrice query IDs in the timeframe with trusted values
+            top_query_ids = conn.execute(f"""
+                SELECT QUERY_ID, COUNT(*) as count 
+                FROM layer_data 
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                AND QUERY_TYPE = 'SpotPrice'
+                AND TRUSTED_VALUE IS NOT NULL
+                AND {safe_filter}
+                GROUP BY QUERY_ID 
+                ORDER BY count DESC 
+                LIMIT 20
+            """, [start_time, current_time_ms] + safe_params).fetchall()
+            
+            if not top_query_ids:
+                return {
+                    "timeframe": timeframe,
+                    "title": f"Trusted Values - SpotPrice (Past {timeframe})",
+                    "data": {},
+                    "query_ids": [],
+                    "time_labels": []
+                }
+            
+            logger.info(f"🔍 Found {len(top_query_ids)} SpotPrice query IDs with trusted values")
+            
+            # Get time series data for each query ID
+            query_data = {}
+            query_id_list = []
+            
+            for query_id_row in top_query_ids:
+                query_id = query_id_row[0]
+                
+                # Get most recent trusted value for this query ID - cast to DOUBLE
+                most_recent = conn.execute(f"""
+                    SELECT CAST(TRUSTED_VALUE AS DOUBLE) as TRUSTED_VALUE 
+                    FROM layer_data 
+                    WHERE QUERY_ID = ? 
+                    AND QUERY_TYPE = 'SpotPrice'
+                    AND TRUSTED_VALUE IS NOT NULL
+                    AND {safe_filter}
+                    ORDER BY TIMESTAMP DESC 
+                    LIMIT 1
+                """, [query_id] + safe_params).fetchone()
+                
+                most_recent_trusted_value = most_recent[0] if most_recent else None
+                
+                query_id_list.append({
+                    "id": query_id,
+                    "total_count": query_id_row[1],
+                    "short_name": get_query_display_name(query_id),
+                    "most_recent_trusted_value": most_recent_trusted_value
+                })
+                
+                # Get bucketed average trusted values for this query ID - cast TRUSTED_VALUE to DOUBLE
+                results = conn.execute(f"""
+                    WITH time_buckets AS (
+                        SELECT 
+                            TIMESTAMP,
+                            CAST(TRUSTED_VALUE AS DOUBLE) as TRUSTED_VALUE,
+                            FLOOR((TIMESTAMP - ?) / ?) as bucket_id
+                        FROM layer_data 
+                        WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                        AND QUERY_ID = ? 
+                        AND QUERY_TYPE = 'SpotPrice'
+                        AND TRUSTED_VALUE IS NOT NULL
+                        AND {safe_filter}
+                    )
+                    SELECT 
+                        bucket_id,
+                        AVG(TRUSTED_VALUE) as avg_trusted_value
+                    FROM time_buckets
+                    GROUP BY bucket_id
+                    ORDER BY bucket_id
+                """, [start_time, interval_ms, start_time, current_time_ms, query_id] + safe_params).fetchall()
+                
+                # Create complete time series for this query ID
+                buckets = []
+                for i in range(num_buckets):
+                    # Find matching result
+                    value = None
+                    for result in results:
+                        if result[0] == i:
+                            value = result[1]
+                            break
+                    buckets.append(value)
+                
+                query_data[query_id] = buckets
+            
+            # Generate time labels
+            time_labels = []
+            for i in range(num_buckets):
+                bucket_start = start_time + (i * interval_ms)
+                dt = pd.to_datetime(bucket_start, unit='ms')
+                
+                if timeframe == "24h":
+                    time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d %H:%M'))
+                elif timeframe == "30d":
+                    time_labels.append(dt.strftime('%m/%d'))
+            
+            return {
+                "timeframe": timeframe,
+                "title": f"Trusted Values - SpotPrice (Past {timeframe})",
+                "time_labels": time_labels,
+                "query_ids": query_id_list,
+                "data": query_data
+            }
+            
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"❌ Trusted values analytics error: {str(e)}")
+        logger.error(f"📋 Full traceback:\n{error_details}")
+        raise HTTPException(status_code=500, detail=f"Trusted values analytics processing failed: {str(e)}")
+
+@dashboard_app.get("/api/overlays-analytics")
+async def get_overlays_analytics(
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+):
+    """Get overlay analytics showing both VALUE and TRUSTED_VALUE for SpotPrice query IDs"""
+    try:
+        logger.info(f"🔄 Overlays analytics request: timeframe={timeframe}")
+        current_time_ms = int(time.time() * 1000)
+        
+        # Use thread-safe database access
+        with db_lock:
+            if timeframe == "24h":
+                hours_24_ms = 24 * 60 * 60 * 1000
+                interval_ms = 30 * 60 * 1000  # 30 minutes
+                num_buckets = 48
+                start_time = current_time_ms - hours_24_ms
+            elif timeframe == "7d":
+                days_7_ms = 7 * 24 * 60 * 60 * 1000
+                interval_ms = 4 * 60 * 60 * 1000  # 4 hours
+                num_buckets = 42
+                start_time = current_time_ms - days_7_ms
+            elif timeframe == "30d":
+                days_30_ms = 30 * 24 * 60 * 60 * 1000
+                interval_ms = 24 * 60 * 60 * 1000  # 1 day
+                num_buckets = 30
+                start_time = current_time_ms - days_30_ms
+            
+            logger.info(f"📈 Querying overlays data from {start_time} to {current_time_ms}")
+            
+            # Get safe timestamp filter for consistency
+            safe_filter, safe_params = get_safe_timestamp_filter()
+            
+            # Get SpotPrice query IDs in the timeframe
+            top_query_ids = conn.execute(f"""
+                SELECT QUERY_ID, COUNT(*) as count 
+                FROM layer_data 
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                AND QUERY_TYPE = 'SpotPrice'
+                AND {safe_filter}
+                GROUP BY QUERY_ID 
+                ORDER BY count DESC 
+                LIMIT 20
+            """, [start_time, current_time_ms] + safe_params).fetchall()
+            
+            if not top_query_ids:
+                return {
+                    "timeframe": timeframe,
+                    "title": f"Value Overlays - SpotPrice (Past {timeframe})",
+                    "data": {},
+                    "query_ids": [],
+                    "time_labels": []
+                }
+            
+            logger.info(f"🔍 Found {len(top_query_ids)} SpotPrice query IDs")
+            
+            # Get time series data for each query ID (both VALUE and TRUSTED_VALUE)
+            query_data = {}
+            query_id_list = []
+            
+            for query_id_row in top_query_ids:
+                query_id = query_id_row[0]
+                
+                # Get most recent value and trusted value for this query ID
+                most_recent_value = conn.execute(f"""
+                    SELECT CAST(VALUE AS DOUBLE) as VALUE 
+                    FROM layer_data 
+                    WHERE QUERY_ID = ? 
+                    AND QUERY_TYPE = 'SpotPrice'
+                    AND VALUE IS NOT NULL
+                    AND {safe_filter}
+                    ORDER BY TIMESTAMP DESC 
+                    LIMIT 1
+                """, [query_id] + safe_params).fetchone()
+                
+                most_recent_trusted = conn.execute(f"""
+                    SELECT CAST(TRUSTED_VALUE AS DOUBLE) as TRUSTED_VALUE 
+                    FROM layer_data 
+                    WHERE QUERY_ID = ? 
+                    AND QUERY_TYPE = 'SpotPrice'
+                    AND TRUSTED_VALUE IS NOT NULL
+                    AND {safe_filter}
+                    ORDER BY TIMESTAMP DESC 
+                    LIMIT 1
+                """, [query_id] + safe_params).fetchone()
+                
+                query_id_list.append({
+                    "id": query_id,
+                    "total_count": query_id_row[1],
+                    "short_name": get_query_display_name(query_id),
+                    "most_recent_value": most_recent_value[0] if most_recent_value else None,
+                    "most_recent_trusted_value": most_recent_trusted[0] if most_recent_trusted else None
+                })
+                
+                # Get bucketed average values for this query ID
+                value_results = conn.execute(f"""
+                    WITH time_buckets AS (
+                        SELECT 
+                            TIMESTAMP,
+                            CAST(VALUE AS DOUBLE) as VALUE,
+                            FLOOR((TIMESTAMP - ?) / ?) as bucket_id
+                        FROM layer_data 
+                        WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                        AND QUERY_ID = ? 
+                        AND QUERY_TYPE = 'SpotPrice'
+                        AND VALUE IS NOT NULL
+                        AND {safe_filter}
+                    )
+                    SELECT 
+                        bucket_id,
+                        AVG(VALUE) as avg_value
+                    FROM time_buckets
+                    GROUP BY bucket_id
+                    ORDER BY bucket_id
+                """, [start_time, interval_ms, start_time, current_time_ms, query_id] + safe_params).fetchall()
+                
+                # Get bucketed average trusted values for this query ID
+                trusted_results = conn.execute(f"""
+                    WITH time_buckets AS (
+                        SELECT 
+                            TIMESTAMP,
+                            CAST(TRUSTED_VALUE AS DOUBLE) as TRUSTED_VALUE,
+                            FLOOR((TIMESTAMP - ?) / ?) as bucket_id
+                        FROM layer_data 
+                        WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                        AND QUERY_ID = ? 
+                        AND QUERY_TYPE = 'SpotPrice'
+                        AND TRUSTED_VALUE IS NOT NULL
+                        AND {safe_filter}
+                    )
+                    SELECT 
+                        bucket_id,
+                        AVG(TRUSTED_VALUE) as avg_trusted_value
+                    FROM time_buckets
+                    GROUP BY bucket_id
+                    ORDER BY bucket_id
+                """, [start_time, interval_ms, start_time, current_time_ms, query_id] + safe_params).fetchall()
+                
+                # Create complete time series for VALUE
+                value_buckets = []
+                for i in range(num_buckets):
+                    value = None
+                    for result in value_results:
+                        if result[0] == i:
+                            value = result[1]
+                            break
+                    value_buckets.append(value)
+                
+                # Create complete time series for TRUSTED_VALUE
+                trusted_buckets = []
+                for i in range(num_buckets):
+                    value = None
+                    for result in trusted_results:
+                        if result[0] == i:
+                            value = result[1]
+                            break
+                    trusted_buckets.append(value)
+                
+                query_data[query_id] = {
+                    "value": value_buckets,
+                    "trusted_value": trusted_buckets
+                }
+            
+            # Generate time labels
+            time_labels = []
+            for i in range(num_buckets):
+                bucket_start = start_time + (i * interval_ms)
+                dt = pd.to_datetime(bucket_start, unit='ms')
+                
+                if timeframe == "24h":
+                    time_labels.append(dt.strftime('%H:%M'))
+                elif timeframe == "7d":
+                    time_labels.append(dt.strftime('%m/%d %H:%M'))
+                elif timeframe == "30d":
+                    time_labels.append(dt.strftime('%m/%d'))
+            
+            return {
+                "timeframe": timeframe,
+                "title": f"Value Overlays - SpotPrice (Past {timeframe})",
+                "time_labels": time_labels,
+                "query_ids": query_id_list,
+                "data": query_data
+            }
+            
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"❌ Overlays analytics error: {str(e)}")
+        logger.error(f"📋 Full traceback:\n{error_details}")
+        raise HTTPException(status_code=500, detail=f"Overlays analytics processing failed: {str(e)}")
 
 # ===========================================
 # REPORTER API ENDPOINTS
