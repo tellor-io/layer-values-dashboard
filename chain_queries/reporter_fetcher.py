@@ -341,12 +341,13 @@ class ReporterFetcher:
         
         return success
 
-    def start_periodic_updates(self, db_connection):
+    def start_periodic_updates(self, db_connection, db_lock=None):
         """
         Start the periodic update thread.
         
         Args:
             db_connection: DuckDB connection to use for updates
+            db_lock: Database lock for thread-safe access (CRITICAL for preventing memory corruption)
         """
         if self.is_running:
             logger.warning("⚠️  Periodic updates already running")
@@ -360,13 +361,23 @@ class ReporterFetcher:
         def update_loop():
             logger.info(f"🔄 Starting periodic reporter updates every {self.update_interval} seconds")
             logger.info(f"🔋 Maximal power updates every {self.maximal_power_interval} seconds")
+            if db_lock:
+                logger.info("🔒 Using database lock for thread-safe access")
+            else:
+                logger.warning("⚠️  No database lock provided - this may cause memory corruption!")
             
             consecutive_failures = 0
             max_consecutive_failures = 5
             
             while self.is_running:
                 try:
-                    success = self.fetch_and_store(db_connection)
+                    # CRITICAL FIX: Use database lock to prevent concurrent access
+                    if db_lock:
+                        with db_lock:
+                            success = self.fetch_and_store(db_connection)
+                    else:
+                        success = self.fetch_and_store(db_connection)
+                        
                     if success:
                         logger.info("✅ Periodic reporter update completed successfully")
                         consecutive_failures = 0  # Reset failure counter on success

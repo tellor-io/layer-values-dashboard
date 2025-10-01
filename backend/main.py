@@ -184,18 +184,20 @@ def create_duckdb_connection():
             conn.execute("SET memory_limit='8GB'")
             logger.info("✅ Using fallback memory limit of 8GB")
         
-        # Set thread configuration
-        conn.execute("SET threads=3")
+        # Set thread configuration - CRITICAL FIX: Reduce threads to minimize memory corruption risk
+        conn.execute("SET threads=1")  # Single thread to prevent internal DuckDB concurrency issues
         conn.execute("SET temp_directory='/tmp/duckdb'")
         
-        # Performance optimizations
+        # Performance optimizations with memory safety focus
         conn.execute("SET preserve_insertion_order=false")
         conn.execute("SET enable_progress_bar=false")
         
-        # Additional CSV-specific optimizations
+        # Additional CSV-specific optimizations with memory safety
         try:
-            conn.execute("SET enable_object_cache=true")
-            conn.execute("SET checkpoint_threshold='1GB'")
+            conn.execute("SET enable_object_cache=false")  # Disable object cache to reduce memory pressure
+            conn.execute("SET checkpoint_threshold='512MB'")  # Smaller checkpoint threshold
+            conn.execute("SET max_memory='8GB'")  # Explicit memory limit
+            conn.execute("SET force_checkpoint=true")  # Force regular checkpoints
         except Exception as opt_error:
             logger.warning(f"⚠️  Could not set some optimization options: {opt_error}")
         
@@ -315,6 +317,20 @@ def calculate_power_of_aggr(source_file=None, recent_only=False):
         recent_only: If True, only update recent timestamps (last 10 unique timestamps)
     """
     try:
+        # CRITICAL FIX: Add memory monitoring and garbage collection to prevent corruption
+        import gc
+        import psutil
+        
+        # Check memory before operation
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+        available_memory = psutil.virtual_memory().available / 1024 / 1024  # MB
+        
+        logger.info(f"💾 POWER_OF_AGGR calculation starting - Memory: {initial_memory:.1f} MB used, {available_memory:.1f} MB available")
+        
+        # Force garbage collection before large operation
+        gc.collect()
+        
         with db_lock:
             if recent_only:
                 logger.info("🔄 Calculating POWER_OF_AGGR values (recent only for performance)...")
@@ -405,11 +421,26 @@ def calculate_power_of_aggr(source_file=None, recent_only=False):
                     logger.info(f"   - Unique timestamps: {safe_get(stats, 0, 0)}")
                     logger.info(f"   - Total rows updated: {safe_get(stats, 1, 0)}")
                     logger.info(f"   - POWER_OF_AGGR range: {safe_get(stats, 2, 0)} - {safe_get(stats, 3, 0)}")
+        
+        # CRITICAL FIX: Monitor memory after operation and force cleanup
+        final_memory = process.memory_info().rss / 1024 / 1024  # MB
+        memory_change = final_memory - initial_memory
+        logger.info(f"💾 POWER_OF_AGGR calculation complete - Memory: {final_memory:.1f} MB used ({memory_change:+.1f} MB change)")
+        
+        # Force garbage collection after large operation
+        gc.collect()
             
     except Exception as e:
         logger.error(f"❌ Error calculating POWER_OF_AGGR: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Force cleanup on error as well
+        try:
+            import gc
+            gc.collect()
+        except:
+            pass
 
 # Data storage
 data_info = {
@@ -1558,7 +1589,9 @@ async def startup_event():
                 
                 # Do initial fetch to populate reporters table
                 logger.info("📡 Performing initial reporter data fetch...")
-                success = reporter_fetcher.fetch_and_store(conn)
+                # Use the database lock to prevent concurrent access during initial fetch
+                with db_lock:
+                    success = reporter_fetcher.fetch_and_store(conn)
                 if success:
                     logger.info("✅ Initial reporter data fetch completed")
                 else:
@@ -1566,13 +1599,15 @@ async def startup_event():
                 
                 # Initialize historical maximal power data (7 days back)
                 try:
-                    reporter_fetcher.initialize_historical_maximal_power(conn, days_back=7)
+                    with db_lock:
+                        reporter_fetcher.initialize_historical_maximal_power(conn, days_back=7)
                     logger.info("🔋 Maximal power historical data initialization completed")
                 except Exception as e:
                     logger.warning(f"⚠️  Could not initialize historical maximal power data: {e}")
                 
                 # Start periodic updates
-                reporter_fetcher.start_periodic_updates(conn)
+                # CRITICAL FIX: Pass the db_lock to ensure thread-safe database access
+                reporter_fetcher.start_periodic_updates(conn, db_lock)
                 logger.info("🚀 Reporter fetcher started successfully")
             else:
                 logger.warning(f"⚠️  Binary not found at {binary_path}, reporter fetcher disabled")
