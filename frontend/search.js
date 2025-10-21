@@ -54,6 +54,7 @@ let currentPage = 1;
 let searchResults = [];
 let searchStats = {};
 let isLoading = false;
+let questionableOnly = false;
 
 // Configuration
 const RECORDS_PER_PAGE = 100;
@@ -260,20 +261,32 @@ const performSearch = async (query, page = 1) => {
     try {
         // Update search term display
         elements.searchTermDisplay.textContent = query;
+        if (questionableOnly) {
+            elements.searchTermDisplay.textContent += ' (Questionable Values Only)';
+        }
         
         // Update URL without reloading
         const url = new URL(window.location);
         url.searchParams.set('q', query);
         url.searchParams.set('page', page);
+        if (questionableOnly) {
+            url.searchParams.set('questionable_only', 'true');
+        } else {
+            url.searchParams.delete('questionable_only');
+        }
         window.history.pushState({}, '', url);
 
         // Search API call
-        console.log(`🔍 Performing search for: "${query}" (page ${page})`);
-        const searchResponse = await apiCall('/api/search', {
+        console.log(`🔍 Performing search for: "${query}" (page ${page})${questionableOnly ? ' [Questionable Only]' : ''}`);
+        const apiParams = {
             q: query,
             limit: RECORDS_PER_PAGE,
             offset: (page - 1) * RECORDS_PER_PAGE
-        });
+        };
+        if (questionableOnly) {
+            apiParams.questionable_only = true;
+        }
+        const searchResponse = await apiCall('/api/search', apiParams);
 
         // Handle the search response structure 
         searchResults = searchResponse.data || [];
@@ -586,10 +599,15 @@ const initializePage = async () => {
     const urlParams = new URLSearchParams(window.location.search);
     const query = urlParams.get('q');
     const page = parseInt(urlParams.get('page')) || 1;
+    questionableOnly = urlParams.get('questionable_only') === 'true';
     
     if (query) {
         elements.newSearchInput.value = query;
         await performSearch(query, page);
+    } else if (questionableOnly) {
+        // If questionable_only is set but no query, search for all questionable values
+        elements.newSearchInput.value = '*';
+        await performSearch('*', page);
     } else {
         // Redirect to dashboard if no search query
         window.location.href = API_BASE || '/dashboard-mainnet';

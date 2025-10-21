@@ -2,7 +2,6 @@
 let isLoading = false;
 let totalRecords = 0;
 let pageLoadTime = new Date(); // Store page load time
-let isQuestionableFilterActive = false; // Track questionable filter state
 
 // Query ID mappings
 let queryMappings = {};
@@ -629,18 +628,9 @@ const showDetails = (row) => {
 };
 
 const showQuestionableValues = async () => {
-    // Toggle questionable filter - redirect to search page with appropriate filter
-    if (isQuestionableFilterActive) {
-        // Remove filter - redirect to search page without filter
-        isQuestionableFilterActive = false;
-        elements.questionableCard.classList.remove('filter-active');
-        window.location.href = `${API_BASE}/search`;
-    } else {
-        // Apply filter - redirect to search page with questionable filter
-        isQuestionableFilterActive = true;
-        elements.questionableCard.classList.add('filter-active');
-        window.location.href = `${API_BASE}/search?questionable_only=true`;
-    }
+    // Redirect to search page with questionable filter
+    // Use wildcard '*' as search term to show all questionable values
+    window.location.href = `${API_BASE}/search?q=*&questionable_only=true`;
 };
 
 // Analytics functionality
