@@ -848,12 +848,12 @@ body {
 }
 
 .legend-item.hidden {
-    opacity: 0.4;
-    background: rgba(15, 15, 20, 0.6);
+    filter: saturate(0%) brightness(0.9);
+    background: rgba(25, 25, 35, 0.4);
 }
 
 .legend-item.hidden .legend-color {
-    opacity: 0.3;
+    filter: saturate(0%) brightness(0.7);
 }
 
 .legend-color {
@@ -940,12 +940,12 @@ body {
 }
 
 .reporter-legend .legend-item.hidden {
-    opacity: 0.4;
-    background: rgba(15, 15, 20, 0.6);
+    filter: saturate(0%) brightness(0.9);
+    background: rgba(25, 25, 35, 0.4);
 }
 
 .reporter-legend .legend-item.hidden .legend-color {
-    opacity: 0.3;
+    filter: saturate(0%) brightness(0.7);
 }
 
 .reporter-legend .legend-color {
@@ -1487,12 +1487,12 @@ body {
 }
 
 .agreement-legend .legend-item.hidden {
-    opacity: 0.4;
-    background: rgba(15, 15, 20, 0.6);
+    filter: saturate(0%) brightness(0.9);
+    background: rgba(25, 25, 35, 0.4);
 }
 
 .agreement-legend .legend-item.hidden .legend-color {
-    opacity: 0.3;
+    filter: saturate(0%) brightness(0.7);
 }
 
 .agreement-legend .legend-color {

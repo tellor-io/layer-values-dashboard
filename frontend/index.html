@@ -86,6 +86,53 @@
             border-color: #00ff88;
         }
         
+        /* Timezone selector row (stacked on top) */
+        .timezone-selector-row {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 15px;
+            padding: 0 10px;
+        }
+        
+        /* Timezone selector styles */
+        .timezone-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .timezone-selector label {
+            color: #00d4ff;
+            font-size: 14px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .timezone-selector select {
+            background: #333344;
+            border: 1px solid #555;
+            color: #00d4ff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            font-size: 14px;
+            min-width: 200px;
+        }
+        
+        .timezone-selector select:hover {
+            background: #555;
+            border-color: #00d4ff;
+        }
+        
+        .timezone-selector select:focus {
+            outline: none;
+            border-color: #00ff88;
+            box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.2);
+        }
+        
         /* Tab content styles */
         .tab-content {
             display: none;
@@ -109,6 +156,15 @@
             
             .timeframe-controls {
                 justify-content: center;
+                flex-wrap: wrap;
+            }
+            
+            .timezone-selector-row {
+                justify-content: center;
+            }
+            
+            .timezone-selector select {
+                min-width: 150px;
             }
         }
         
@@ -410,6 +466,35 @@
                         <i class="fas fa-chart-line"></i>
                         Reporter Activity
                     </h2>
+                </div>
+                
+                <!-- Timezone Selector (stacked on top) -->
+                <div class="timezone-selector-row">
+                    <div class="timezone-selector">
+                        <label for="timezone-select">
+                            <i class="fas fa-globe"></i> Timezone:
+                        </label>
+                        <select id="timezone-select">
+                            <option value="America/New_York" selected>East Coast US (ET)</option>
+                            <option value="America/Chicago">Central US (CT)</option>
+                            <option value="America/Denver">Mountain US (MT)</option>
+                            <option value="America/Los_Angeles">West Coast US (PT)</option>
+                            <option value="America/Phoenix">Arizona (MST)</option>
+                            <option value="America/Anchorage">Alaska (AKT)</option>
+                            <option value="Pacific/Honolulu">Hawaii (HST)</option>
+                            <option value="UTC">UTC</option>
+                            <option value="Europe/London">London (GMT/BST)</option>
+                            <option value="Europe/Paris">Paris (CET/CEST)</option>
+                            <option value="Europe/Berlin">Berlin (CET/CEST)</option>
+                            <option value="Europe/Istanbul">Istanbul (TRT)</option>
+                            <option value="Asia/Dubai">Dubai (GST)</option>
+                            <option value="Asia/Tokyo">Tokyo (JST)</option>
+                            <option value="Asia/Shanghai">Shanghai (CST)</option>
+                            <option value="Asia/Singapore">Singapore (SGT)</option>
+                            <option value="Asia/Seoul">Seoul (KST)</option>
+                            <option value="Australia/Sydney">Sydney (AEDT/AEST)</option>
+                        </select>
+                    </div>
                 </div>
                 
                 <!-- Combined Tab Navigation and Controls -->

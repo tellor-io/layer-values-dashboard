@@ -2573,7 +2573,8 @@ async def get_query_analytics(
 
 @dashboard_app.get("/api/reporter-analytics")
 async def get_reporter_analytics(
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$"),
+    timezone: str = Query("America/New_York", description="IANA timezone (e.g., 'America/New_York', 'UTC', 'America/Los_Angeles')")
 ):
     """Get analytics data by reporter for different timeframes"""
     try:
@@ -2692,12 +2693,26 @@ async def get_reporter_analytics(
                 
                 reporter_data[reporter] = buckets
             
-            # Generate time labels
+            # Generate time labels with timezone support
             time_labels = []
+            time_labels_full = []  # Full datetime for tooltips
+            try:
+                # Validate and use the provided timezone
+                import pytz
+                tz = pytz.timezone(timezone)
+            except Exception as tz_error:
+                logger.warning(f"⚠️  Invalid timezone '{timezone}', falling back to America/New_York: {tz_error}")
+                tz = pytz.timezone("America/New_York")
+            
             for i in range(num_buckets):
                 bucket_start = start_time + (i * interval_ms)
-                dt = pd.to_datetime(bucket_start, unit='ms')
+                # Convert to timezone-aware datetime
+                dt = pd.to_datetime(bucket_start, unit='ms', utc=True).tz_convert(tz)
                 
+                # Full datetime for tooltips
+                time_labels_full.append(dt.strftime('%Y-%m-%d %H:%M %Z'))
+                
+                # Short labels for axis
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
                 elif timeframe == "7d":
@@ -2709,6 +2724,7 @@ async def get_reporter_analytics(
                 "timeframe": timeframe,
                 "title": f"Reports by Reporter (Past {timeframe})",
                 "time_labels": time_labels,
+                "time_labels_full": time_labels_full,
                 "reporters": reporter_list,
                 "data": reporter_data
             }
@@ -3861,7 +3877,8 @@ async def get_reporter_detail(address: str):
 @dashboard_app.get("/api/reporters-activity-analytics")
 async def get_reporters_activity_analytics(
     request: Request,
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$"),
+    timezone: str = Query("America/New_York", description="IANA timezone (e.g., 'America/New_York', 'UTC', 'America/Los_Angeles')")
 ):
     """Get total reports by active reporters analytics data for different timeframes"""
     try:
@@ -3984,11 +4001,26 @@ async def get_reporters_activity_analytics(
             total_reports_data = [row[2] for row in results]
             representative_power_of_aggr_data = [row[3] for row in results]
             
-            # Generate time labels efficiently
+            # Generate time labels efficiently with timezone support
             time_labels = []
+            time_labels_full = []  # Full datetime for tooltips
+            try:
+                # Validate and use the provided timezone
+                import pytz
+                tz = pytz.timezone(timezone)
+            except Exception as tz_error:
+                logger.warning(f"⚠️  Invalid timezone '{timezone}', falling back to America/New_York: {tz_error}")
+                tz = pytz.timezone("America/New_York")
+            
             for i in range(num_buckets):
                 bucket_start = start_time + (i * interval_ms)
-                dt = pd.to_datetime(bucket_start, unit='ms')
+                # Convert to timezone-aware datetime
+                dt = pd.to_datetime(bucket_start, unit='ms', utc=True).tz_convert(tz)
+                
+                # Full datetime for tooltips
+                time_labels_full.append(dt.strftime('%Y-%m-%d %H:%M %Z'))
+                
+                # Short labels for axis
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
                 elif timeframe == "7d":
@@ -4004,6 +4036,7 @@ async def get_reporters_activity_analytics(
                 "timeframe": timeframe,
                 "title": f"Reporter Activity (Past {timeframe})",
                 "time_labels": time_labels,
+                "time_labels_full": time_labels_full,
                 "total_reports": total_reports_data,
                 "representative_power_of_aggr": representative_power_of_aggr_data,
                 "maximal_power_network": maximal_power_data,
