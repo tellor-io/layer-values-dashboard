@@ -2236,7 +2236,8 @@ async def serve_search_page():
 async def search_data(
     q: str = Query(..., min_length=1),
     limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    questionable_only: Optional[bool] = None
 ):
     """Enhanced search across all text fields with statistics and insights"""
     try:
@@ -2244,15 +2245,55 @@ async def search_data(
             # Get safe timestamp filter to exclude incomplete blocks
             safe_filter, safe_params = get_safe_timestamp_filter()
             
+            # Build questionable filter if needed
+            questionable_filter = ""
+            if questionable_only:
+                current_time_ms = int(time.time() * 1000)
+                hours_72_ms = 72 * 60 * 60 * 1000  # 72 hours in milliseconds
+                questionable_filter = f"AND DISPUTABLE = true AND ({current_time_ms} - TIMESTAMP) < {hours_72_ms}"
+            
+            # Build search condition - if query is '*' and questionable_only is true, match all
+            if q == '*' and questionable_only:
+                search_condition = "1=1"  # Match all records
+            else:
+                # Check for special field searches (e.g., "disputable:true")
+                if q.lower().startswith('disputable:'):
+                    disputable_value = q.split(':', 1)[1].strip().lower()
+                    if disputable_value in ['true', '1', 'yes']:
+                        search_condition = "DISPUTABLE = true"
+                        # Add time constraint to prevent timeout on large datasets
+                        # Limit to last 7 days for disputable:true searches
+                        current_time_ms = int(time.time() * 1000)
+                        days_7_ms = 7 * 24 * 60 * 60 * 1000
+                        search_condition = f"DISPUTABLE = true AND ({current_time_ms} - TIMESTAMP) < {days_7_ms}"
+                    elif disputable_value in ['false', '0', 'no']:
+                        search_condition = "DISPUTABLE = false"
+                        # Limit to recent data for better performance
+                        current_time_ms = int(time.time() * 1000)
+                        days_7_ms = 7 * 24 * 60 * 60 * 1000
+                        search_condition = f"DISPUTABLE = false AND ({current_time_ms} - TIMESTAMP) < {days_7_ms}"
+                    else:
+                        # Invalid disputable value, fall back to normal search
+                        search_condition = f"""(
+                            REPORTER LIKE '%{q}%' OR
+                            QUERY_ID LIKE '%{q}%' OR
+                            TX_HASH LIKE '%{q}%' OR
+                            CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                        )"""
+                else:
+                    # Normal text search across multiple fields
+                    search_condition = f"""(
+                        REPORTER LIKE '%{q}%' OR
+                        QUERY_ID LIKE '%{q}%' OR
+                        TX_HASH LIKE '%{q}%' OR
+                        CAST(VALUE AS VARCHAR) LIKE '%{q}%' OR
+                        CAST(DISPUTABLE AS VARCHAR) LIKE '%{q}%'
+                    )"""
+            
             # Main search query with pagination
             search_query = f"""
                 SELECT * FROM layer_data 
-                WHERE (
-                    REPORTER LIKE '%{q}%' OR
-                    QUERY_ID LIKE '%{q}%' OR
-                    TX_HASH LIKE '%{q}%' OR
-                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
-                ) AND {safe_filter}
+                WHERE {search_condition} AND {safe_filter} {questionable_filter}
                 ORDER BY TIMESTAMP DESC
                 LIMIT {limit} OFFSET {offset}
             """
@@ -2262,12 +2303,7 @@ async def search_data(
             # Get total count for pagination
             count_query = f"""
                 SELECT COUNT(*) as total FROM layer_data 
-                WHERE (
-                    REPORTER LIKE '%{q}%' OR
-                    QUERY_ID LIKE '%{q}%' OR
-                    TX_HASH LIKE '%{q}%' OR
-                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
-                ) AND {safe_filter}
+                WHERE {search_condition} AND {safe_filter} {questionable_filter}
             """
             
             total_count = safe_get(conn.execute(count_query, safe_params).fetchone())
@@ -2275,12 +2311,8 @@ async def search_data(
             # Generate statistics and insights
             stats_query = f"""
                 WITH filtered AS (
-                    SELECT * FROM layer_data WHERE (
-                        REPORTER LIKE '%{q}%' OR
-                        QUERY_ID LIKE '%{q}%' OR
-                        TX_HASH LIKE '%{q}%' OR
-                        CAST(VALUE AS VARCHAR) LIKE '%{q}%'
-                    ) AND {safe_filter}
+                    SELECT * FROM layer_data 
+                    WHERE {search_condition} AND {safe_filter} {questionable_filter}
                 ),
                 casted AS (
                     SELECT 
@@ -2311,12 +2343,7 @@ async def search_data(
             top_reporter_query = f"""
                 SELECT REPORTER, COUNT(*) as count
                 FROM layer_data 
-                WHERE (
-                    REPORTER LIKE '%{q}%' OR
-                    QUERY_ID LIKE '%{q}%' OR
-                    TX_HASH LIKE '%{q}%' OR
-                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
-                ) AND {safe_filter}
+                WHERE {search_condition} AND {safe_filter} {questionable_filter}
                 GROUP BY REPORTER
                 ORDER BY count DESC
                 LIMIT 1
@@ -2328,12 +2355,7 @@ async def search_data(
             top_query_id_query = f"""
                 SELECT QUERY_ID, COUNT(*) as count
                 FROM layer_data 
-                WHERE (
-                    REPORTER LIKE '%{q}%' OR
-                    QUERY_ID LIKE '%{q}%' OR
-                    TX_HASH LIKE '%{q}%' OR
-                    CAST(VALUE AS VARCHAR) LIKE '%{q}%'
-                ) AND {safe_filter}
+                WHERE {search_condition} AND {safe_filter} {questionable_filter}
                 GROUP BY QUERY_ID
                 ORDER BY count DESC
                 LIMIT 1
@@ -2551,7 +2573,8 @@ async def get_query_analytics(
 
 @dashboard_app.get("/api/reporter-analytics")
 async def get_reporter_analytics(
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$"),
+    timezone: str = Query("America/New_York", description="IANA timezone (e.g., 'America/New_York', 'UTC', 'America/Los_Angeles')")
 ):
     """Get analytics data by reporter for different timeframes"""
     try:
@@ -2670,12 +2693,26 @@ async def get_reporter_analytics(
                 
                 reporter_data[reporter] = buckets
             
-            # Generate time labels
+            # Generate time labels with timezone support
             time_labels = []
+            time_labels_full = []  # Full datetime for tooltips
+            try:
+                # Validate and use the provided timezone
+                import pytz
+                tz = pytz.timezone(timezone)
+            except Exception as tz_error:
+                logger.warning(f"⚠️  Invalid timezone '{timezone}', falling back to America/New_York: {tz_error}")
+                tz = pytz.timezone("America/New_York")
+            
             for i in range(num_buckets):
                 bucket_start = start_time + (i * interval_ms)
-                dt = pd.to_datetime(bucket_start, unit='ms')
+                # Convert to timezone-aware datetime
+                dt = pd.to_datetime(bucket_start, unit='ms', utc=True).tz_convert(tz)
                 
+                # Full datetime for tooltips
+                time_labels_full.append(dt.strftime('%Y-%m-%d %H:%M %Z'))
+                
+                # Short labels for axis
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
                 elif timeframe == "7d":
@@ -2687,6 +2724,7 @@ async def get_reporter_analytics(
                 "timeframe": timeframe,
                 "title": f"Reports by Reporter (Past {timeframe})",
                 "time_labels": time_labels,
+                "time_labels_full": time_labels_full,
                 "reporters": reporter_list,
                 "data": reporter_data
             }
@@ -3839,7 +3877,8 @@ async def get_reporter_detail(address: str):
 @dashboard_app.get("/api/reporters-activity-analytics")
 async def get_reporters_activity_analytics(
     request: Request,
-    timeframe: str = Query(..., regex="^(24h|7d|30d)$")
+    timeframe: str = Query(..., regex="^(24h|7d|30d)$"),
+    timezone: str = Query("America/New_York", description="IANA timezone (e.g., 'America/New_York', 'UTC', 'America/Los_Angeles')")
 ):
     """Get total reports by active reporters analytics data for different timeframes"""
     try:
@@ -3962,11 +4001,26 @@ async def get_reporters_activity_analytics(
             total_reports_data = [row[2] for row in results]
             representative_power_of_aggr_data = [row[3] for row in results]
             
-            # Generate time labels efficiently
+            # Generate time labels efficiently with timezone support
             time_labels = []
+            time_labels_full = []  # Full datetime for tooltips
+            try:
+                # Validate and use the provided timezone
+                import pytz
+                tz = pytz.timezone(timezone)
+            except Exception as tz_error:
+                logger.warning(f"⚠️  Invalid timezone '{timezone}', falling back to America/New_York: {tz_error}")
+                tz = pytz.timezone("America/New_York")
+            
             for i in range(num_buckets):
                 bucket_start = start_time + (i * interval_ms)
-                dt = pd.to_datetime(bucket_start, unit='ms')
+                # Convert to timezone-aware datetime
+                dt = pd.to_datetime(bucket_start, unit='ms', utc=True).tz_convert(tz)
+                
+                # Full datetime for tooltips
+                time_labels_full.append(dt.strftime('%Y-%m-%d %H:%M %Z'))
+                
+                # Short labels for axis
                 if timeframe == "24h":
                     time_labels.append(dt.strftime('%H:%M'))
                 elif timeframe == "7d":
@@ -3982,6 +4036,7 @@ async def get_reporters_activity_analytics(
                 "timeframe": timeframe,
                 "title": f"Reporter Activity (Past {timeframe})",
                 "time_labels": time_labels,
+                "time_labels_full": time_labels_full,
                 "total_reports": total_reports_data,
                 "representative_power_of_aggr": representative_power_of_aggr_data,
                 "maximal_power_network": maximal_power_data,

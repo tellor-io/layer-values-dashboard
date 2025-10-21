@@ -2,7 +2,6 @@
 let isLoading = false;
 let totalRecords = 0;
 let pageLoadTime = new Date(); // Store page load time
-let isQuestionableFilterActive = false; // Track questionable filter state
 
 // Query ID mappings
 let queryMappings = {};
@@ -168,6 +167,22 @@ const elements = {
     totalPages: document.getElementById('total-pages'),
     reporterActivityChart: document.getElementById('reporter-activity-chart'),
     reporterActivityLoading: document.getElementById('reporter-activity-loading'),
+    timezoneSelect: document.getElementById('timezone-select'),
+};
+
+// Timezone management
+const getSelectedTimezone = () => {
+    // Try to get from local storage first
+    const savedTimezone = localStorage.getItem('selectedTimezone');
+    if (savedTimezone) {
+        return savedTimezone;
+    }
+    // Default to America/New_York
+    return 'America/New_York';
+};
+
+const setSelectedTimezone = (timezone) => {
+    localStorage.setItem('selectedTimezone', timezone);
 };
 
 // Utility functions
@@ -629,18 +644,9 @@ const showDetails = (row) => {
 };
 
 const showQuestionableValues = async () => {
-    // Toggle questionable filter - redirect to search page with appropriate filter
-    if (isQuestionableFilterActive) {
-        // Remove filter - redirect to search page without filter
-        isQuestionableFilterActive = false;
-        elements.questionableCard.classList.remove('filter-active');
-        window.location.href = `${API_BASE}/search`;
-    } else {
-        // Apply filter - redirect to search page with questionable filter
-        isQuestionableFilterActive = true;
-        elements.questionableCard.classList.add('filter-active');
-        window.location.href = `${API_BASE}/search?questionable_only=true`;
-    }
+    // Redirect to search page with questionable filter
+    // Use wildcard '*' as search term to show all questionable values
+    window.location.href = `${API_BASE}/search?q=*&questionable_only=true`;
 };
 
 // Analytics functionality
@@ -1810,8 +1816,11 @@ const loadReporterAnalytics = async (timeframe) => {
             }
         });
         
-        // Fetch reporter analytics data
-        const data = await apiCall('/reporter-analytics', { timeframe });
+        // Get selected timezone
+        const timezone = getSelectedTimezone();
+        
+        // Fetch reporter analytics data with timezone
+        const data = await apiCall('/reporter-analytics', { timeframe, timezone });
         
         // Update title
         elements.reporterAnalyticsTitle.textContent = data.title;
@@ -1833,6 +1842,9 @@ const loadReporterAnalytics = async (timeframe) => {
 
 const createReporterAnalyticsChart = (data) => {
     const ctx = elements.reporterAnalyticsChart.getContext('2d');
+    
+    // Store full time labels for tooltips
+    const timeLabelsFullForTooltip = data.time_labels_full || data.time_labels || [];
     
     // Destroy existing chart
     if (reporterAnalyticsChart) {
@@ -1892,7 +1904,10 @@ const createReporterAnalyticsChart = (data) => {
                     intersect: false,
                     callbacks: {
                         title: function(context) {
-                            return `Time: ${context[0].label}`;
+                            // Use full datetime label if available
+                            const index = context[0].dataIndex;
+                            const fullLabel = timeLabelsFullForTooltip[index];
+                            return fullLabel || context[0].label;
                         },
                         label: function(context) {
                             const dataset = context.dataset;
@@ -2694,8 +2709,11 @@ class ReportersManager {
                 elements.reporterActivityLoading.style.display = 'flex';
             }
             
-            // Fetch analytics data
-            const data = await apiCall(`/reporters-activity-analytics?timeframe=${timeframe}`);
+            // Get selected timezone
+            const timezone = getSelectedTimezone();
+            
+            // Fetch analytics data with timezone
+            const data = await apiCall(`/reporters-activity-analytics?timeframe=${timeframe}&timezone=${encodeURIComponent(timezone)}`);
             
             // Create or update chart
             this.createReporterActivityChart(data);
@@ -2725,6 +2743,10 @@ class ReportersManager {
         if (!elements.reporterActivityChart) return;
         
         const ctx = elements.reporterActivityChart.getContext('2d');
+        
+        // Store full time labels for tooltips
+        this.timeLabels = data.time_labels || [];
+        this.timeLabelsFullForTooltip = data.time_labels_full || this.timeLabels;
         
         // Adjust chart height on mobile for better viewport fit
         const chartContainer = elements.reporterActivityChart.parentElement;
@@ -2875,8 +2897,11 @@ class ReportersManager {
                         borderColor: '#00d4ff',
                         borderWidth: 1,
                         callbacks: {
-                            title: function(context) {
-                                return `Time: ${context[0].label}`;
+                            title: (context) => {
+                                // Use full datetime label if available
+                                const index = context[0].dataIndex;
+                                const fullLabel = this.timeLabelsFullForTooltip[index];
+                                return fullLabel || context[0].label;
                             },
                             label: function(context) {
                                 const dataset = context.dataset;
@@ -3074,6 +3099,28 @@ function initializeTabs() {
 document.addEventListener('DOMContentLoaded', async () => {
     // Set and display load time
     updateLoadTime();
+    
+    // Initialize timezone selector with saved value
+    if (elements.timezoneSelect) {
+        const savedTimezone = getSelectedTimezone();
+        elements.timezoneSelect.value = savedTimezone;
+        
+        // Add event listener for timezone changes
+        elements.timezoneSelect.addEventListener('change', (e) => {
+            const newTimezone = e.target.value;
+            setSelectedTimezone(newTimezone);
+            
+            // Reload the currently active chart with new timezone
+            const activeTab = document.querySelector('.tab-content.active')?.id;
+            const activeTimeframe = document.querySelector('.timeframe-controls .analytics-btn.active')?.dataset.timeframe || '24h';
+            
+            if (activeTab === 'activity-overview') {
+                reportersManager.loadReporterActivityAnalytics(activeTimeframe);
+            } else if (activeTab === 'individual-reporters') {
+                loadReporterAnalytics(activeTimeframe);
+            }
+        });
+    }
     
     // Initialize configuration from backend
     await initializeConfig();
