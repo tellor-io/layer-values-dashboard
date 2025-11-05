@@ -3049,18 +3049,32 @@ async def get_agreement_analytics(
             safe_filter, safe_params = get_safe_timestamp_filter()
             
             # Get total count of unique query IDs in the timeframe (with trusted values)
+            # Use safe numeric conversion to handle both numeric strings and JSON strings
             total_unique_query_ids = safe_get(conn.execute(f"""
                 SELECT COUNT(DISTINCT QUERY_ID) 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND TRUSTED_VALUE != 0 AND {safe_filter}
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                AND TRUSTED_VALUE IS NOT NULL 
+                AND TRUSTED_VALUE != '' 
+                AND TRUSTED_VALUE NOT LIKE '{{%'
+                AND TRY_CAST(TRUSTED_VALUE AS DOUBLE) IS NOT NULL 
+                AND TRY_CAST(TRUSTED_VALUE AS DOUBLE) != 0 
+                AND {safe_filter}
             """, [start_time, current_time_ms] + safe_params).fetchone())
             
             # Get top query IDs in the timeframe
             # Increase limit to show more query IDs (up to 50 for better coverage)
+            # Use safe numeric conversion to handle both numeric strings and JSON strings
             top_query_ids = conn.execute(f"""
                 SELECT QUERY_ID, COUNT(*) as count 
                 FROM layer_data 
-                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? AND TRUSTED_VALUE != 0 AND {safe_filter}
+                WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
+                AND TRUSTED_VALUE IS NOT NULL 
+                AND TRUSTED_VALUE != '' 
+                AND TRUSTED_VALUE NOT LIKE '{{%'
+                AND TRY_CAST(TRUSTED_VALUE AS DOUBLE) IS NOT NULL 
+                AND TRY_CAST(TRUSTED_VALUE AS DOUBLE) != 0 
+                AND {safe_filter}
                 GROUP BY QUERY_ID 
                 ORDER BY count DESC 
                 LIMIT 50
@@ -3090,6 +3104,7 @@ async def get_agreement_analytics(
                 })
                 
                 # Get bucketed deviation data for this query ID with safe timestamp filtering
+                # Filter out JSON-like TRUSTED_VALUE entries to prevent casting errors
                 results = conn.execute(f"""
                     WITH casted AS (
                         SELECT 
@@ -3099,7 +3114,11 @@ async def get_agreement_analytics(
                             TRY_CAST(TRUSTED_VALUE AS DOUBLE) AS T
                         FROM layer_data 
                         WHERE TIMESTAMP >= ? AND TIMESTAMP < ? 
-                        AND QUERY_ID = ? AND {safe_filter}
+                        AND QUERY_ID = ? 
+                        AND TRUSTED_VALUE IS NOT NULL 
+                        AND TRUSTED_VALUE != '' 
+                        AND TRUSTED_VALUE NOT LIKE '{{%'
+                        AND {safe_filter}
                     ),
                     time_buckets AS (
                         SELECT bucket_id,
