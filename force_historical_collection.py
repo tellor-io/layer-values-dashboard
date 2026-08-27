@@ -78,7 +78,7 @@ def direct_database_collection():
         # Initialize tracker with fixed path
         tracker = MaximalPowerTracker(
             binary_path='./layerd',
-            rpc_url='http://localhost:26657'
+            rpc_url='http://localhost:23457'
         )
         
         # Connect to main database (should be the same one the dashboard uses)

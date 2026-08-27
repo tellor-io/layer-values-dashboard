@@ -6,7 +6,7 @@ import sys
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 import uvicorn
 from typing import Optional, List
 import threading
@@ -1389,7 +1389,8 @@ def periodic_reload():
             debug_cycle = getattr(periodic_reload, 'debug_cycle', 0) + 1
             periodic_reload.debug_cycle = debug_cycle
             
-            # Heartbeat refresh - force recalculation periodically
+            # Heartbeat refresh - update displayed totals periodically.
+            # Do not skip the file-size check below; that is what picks up new reports.
             current_time = time.time()
             if current_time - last_heartbeat_refresh >= HEARTBEAT_INTERVAL:
                 logger.info("💓 Heartbeat refresh - updating timestamp only (safe)")
@@ -1405,7 +1406,6 @@ def periodic_reload():
                     logger.info(f"💓 Heartbeat refresh completed - {formatNumber(actual_total)} total rows")
                     last_heartbeat_refresh = current_time
                     consecutive_errors = 0
-                    continue
                 except Exception as heartbeat_error:
                     logger.error(f"❌ Heartbeat refresh error: {heartbeat_error}")
                     # Don't count heartbeat errors toward consecutive errors
@@ -1438,9 +1438,7 @@ def periodic_reload():
                 newest_table['filename'] == current_active['filename'] and
                 newest_table['size'] != data_info["active_table_last_size"]):
                 
-                # Add additional validation before attempting reload
                 size_change = newest_table['size'] - data_info["active_table_last_size"]
-                min_change_threshold = 10000  # Only reload if file grew by at least 10KB (reasonable change)
                 
                 # Add debug logging to understand what's happening
                 logger.debug(f"📊 File size check: current={newest_table['size']}, last_processed={data_info['active_table_last_size']}, change={size_change}")
@@ -1451,7 +1449,10 @@ def periodic_reload():
                     data_info["active_table_last_size"] = newest_table['size']
                     continue
                 
-                if size_change >= min_change_threshold:
+                # Load any growth. A previous 10KB-per-check gate discarded smaller
+                # increments by advancing last_size, which silently dropped reports
+                # after block time increased (~1.6s -> ~10.3s) and files grew slower.
+                if size_change > 0:
                     # Check memory before reloading
                     process = psutil.Process()
                     memory_mb = process.memory_info().rss / 1024 / 1024
@@ -1464,7 +1465,7 @@ def periodic_reload():
                         continue
                     
                     # Prevent concurrent reloads by checking if another reload is in progress
-                    if hasattr(data_info, 'reload_in_progress') and data_info.get('reload_in_progress', False):
+                    if data_info.get('reload_in_progress', False):
                         logger.info("🔄 Reload already in progress, skipping...")
                         continue
                     
@@ -1497,10 +1498,6 @@ def periodic_reload():
                             # Don't count this as an error since load_active_table already has retry logic
                     finally:
                         data_info['reload_in_progress'] = False
-                else:
-                    logger.debug(f"📝 Active table size change too small ({size_change} bytes), skipping reload")
-                    # Update the size anyway to prevent constant small change detection
-                    data_info["active_table_last_size"] = newest_table['size']
                 
         except Exception as e:
             consecutive_errors += 1
@@ -2411,6 +2408,117 @@ async def search_data(
         
     except Exception as e:
         logger.error(f"Search error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@dashboard_app.get("/api/search/export")
+async def export_search_data(
+    q: str = Query(..., min_length=1),
+    questionable_only: Optional[bool] = None
+):
+    """Export all search results as a CSV file (no pagination limit)"""
+    import io
+    import csv
+
+    try:
+        with db_lock:
+            safe_filter, safe_params = get_safe_timestamp_filter()
+
+            questionable_filter = ""
+            if questionable_only:
+                current_time_ms = int(time.time() * 1000)
+                hours_72_ms = 72 * 60 * 60 * 1000
+                questionable_filter = f"AND DISPUTABLE = true AND ({current_time_ms} - TIMESTAMP) < {hours_72_ms}"
+
+            if q == '*' and questionable_only:
+                search_condition = "1=1"
+            else:
+                if q.lower().startswith('disputable:'):
+                    disputable_value = q.split(':', 1)[1].strip().lower()
+                    if disputable_value in ['true', '1', 'yes']:
+                        current_time_ms = int(time.time() * 1000)
+                        days_7_ms = 7 * 24 * 60 * 60 * 1000
+                        search_condition = f"DISPUTABLE = true AND ({current_time_ms} - TIMESTAMP) < {days_7_ms}"
+                    elif disputable_value in ['false', '0', 'no']:
+                        current_time_ms = int(time.time() * 1000)
+                        days_7_ms = 7 * 24 * 60 * 60 * 1000
+                        search_condition = f"DISPUTABLE = false AND ({current_time_ms} - TIMESTAMP) < {days_7_ms}"
+                    else:
+                        search_condition = f"""(
+                            REPORTER LIKE '%{q}%' OR
+                            QUERY_ID LIKE '%{q}%' OR
+                            TX_HASH LIKE '%{q}%' OR
+                            CAST(VALUE AS VARCHAR) LIKE '%{q}%'
+                        )"""
+                else:
+                    search_condition = f"""(
+                        REPORTER LIKE '%{q}%' OR
+                        QUERY_ID LIKE '%{q}%' OR
+                        TX_HASH LIKE '%{q}%' OR
+                        CAST(VALUE AS VARCHAR) LIKE '%{q}%' OR
+                        CAST(DISPUTABLE AS VARCHAR) LIKE '%{q}%'
+                    )"""
+
+            export_query = f"""
+                SELECT QUERY_ID, VALUE, TRUSTED_VALUE, REPORTER, POWER,
+                       TIMESTAMP, DISPUTABLE, TX_HASH, QUERY_TYPE
+                FROM layer_data
+                WHERE {search_condition} AND {safe_filter} {questionable_filter}
+                ORDER BY TIMESTAMP DESC
+            """
+
+            results = conn.execute(export_query, safe_params).df()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            'Query ID', 'Query Type', 'Reported Value', 'Trusted Value',
+            'Agreement', 'Reporter', 'Power', 'Timestamp', 'TX Hash', 'Disputable'
+        ])
+
+        for _, row in results.iterrows():
+            val = row.get('VALUE')
+            trusted = row.get('TRUSTED_VALUE')
+            if val is not None and trusted is not None:
+                try:
+                    agreement = 'Match' if float(val) == float(trusted) else 'Mismatch'
+                except (ValueError, TypeError):
+                    agreement = 'N/A'
+            else:
+                agreement = 'N/A'
+
+            ts = row.get('TIMESTAMP')
+            ts_str = ''
+            if ts is not None:
+                try:
+                    ts_str = pd.Timestamp(int(ts), unit='ms').isoformat()
+                except Exception:
+                    ts_str = str(ts)
+
+            writer.writerow([
+                row.get('QUERY_ID', ''),
+                row.get('QUERY_TYPE', ''),
+                row.get('VALUE', ''),
+                row.get('TRUSTED_VALUE', ''),
+                agreement,
+                row.get('REPORTER', ''),
+                row.get('POWER', ''),
+                ts_str,
+                row.get('TX_HASH', ''),
+                'Yes' if row.get('DISPUTABLE') else 'No'
+            ])
+
+        output.seek(0)
+        safe_query = re.sub(r'[^a-zA-Z0-9_-]', '_', q)[:50]
+        filename = f"search_export_{safe_query}_{int(time.time())}.csv"
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    except Exception as e:
+        logger.error(f"Search export error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @dashboard_app.get("/api/query-analytics")

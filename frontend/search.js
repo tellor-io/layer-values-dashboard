@@ -95,7 +95,8 @@ const elements = {
     detailModal: document.getElementById('detail-modal'),
     modalClose: document.getElementById('modal-close'),
     modalBody: document.getElementById('modal-body'),
-    exportResults: document.getElementById('export-results')
+    exportResults: document.getElementById('export-results'),
+    exportAllResults: document.getElementById('export-all-results')
 };
 
 // Utility functions
@@ -693,7 +694,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     agreement.text,
                     row.REPORTER,
                     row.POWER,
-                    new Date(row.TIMESTAMP * 1000).toISOString(),
+                    new Date(row.TIMESTAMP).toISOString(),
                     row.DISPUTABLE ? 'Yes' : 'No'
                 ].join(',');
             })
@@ -709,6 +710,49 @@ document.addEventListener('DOMContentLoaded', () => {
         a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
+    });
+    
+    // Export ALL results via backend CSV endpoint
+    elements.exportAllResults.addEventListener('click', async () => {
+        const total = searchStats.total_matches || 0;
+        if (total === 0) {
+            alert('No results to export');
+            return;
+        }
+        
+        const btn = elements.exportAllResults;
+        const originalHTML = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Exporting...';
+        
+        try {
+            const params = new URLSearchParams({ q: currentSearchQuery });
+            if (questionableOnly) {
+                params.append('questionable_only', 'true');
+            }
+            const exportUrl = `${API_BASE}/api/search/export?${params.toString()}`;
+            
+            const response = await fetch(exportUrl);
+            if (!response.ok) {
+                throw new Error(`Export failed: HTTP ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            const downloadUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = `search_all_results_${currentSearchQuery}_${new Date().toISOString().split('T')[0]}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(downloadUrl);
+        } catch (error) {
+            console.error('Export all failed:', error);
+            alert('Failed to export all results. Please try again.');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalHTML;
+        }
     });
 });
 
